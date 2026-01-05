@@ -732,7 +732,8 @@ const App: React.FC = () => {
 
              newWorkers = jsonData.map((row: any) => {
                 // Recuperar valores usando múltiples posibles nombres de columna
-                const codeVal = findColumnValue(row, ['cod', 'codigo', 'id', 'referencia', 'nº', 'numero']);
+                // FIX: Eliminado 'id' para evitar conflictos con 'apellidos'
+                const codeVal = findColumnValue(row, ['cod', 'codigo', 'referencia', 'nº', 'numero']);
                 const nameVal = findColumnValue(row, ['nombre', 'worker', 'empleado', 'apellidos']);
                 const dniVal = findColumnValue(row, ['dni', 'nie', 'nif', 'documento']);
                 const phoneVal = findColumnValue(row, ['telefono', 'movil', 'celular']);
@@ -2111,7 +2112,7 @@ const App: React.FC = () => {
                  </section>
 
                  {/* Control de Gasolina (NUEVO) */}
-                 {!editingWorker.id.startsWith('w-') && (
+                 {planning.workers.some(w => w.id === editingWorker.id) && (
                     <section className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100">
                         <div className="flex items-center gap-3 mb-4">
                             <div className="p-2 bg-amber-100 text-amber-600 rounded-xl"><Fuel className="w-4 h-4" /></div>
@@ -2160,7 +2161,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-slate-100">
-                 {!editingWorker.id.startsWith('w-') && (
+                 {planning.workers.some(w => w.id === editingWorker.id) && (
                     <button onClick={() => setConfirmDeleteId(editingWorker.id)} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors mr-auto"><Trash2 className="w-5 h-5" /></button>
                  )}
                  <button onClick={() => setEditingWorker(null)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50">Cancelar</button>
