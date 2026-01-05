@@ -1286,7 +1286,17 @@ const App: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {filteredWorkersTable.map(worker => (
                       <tr key={worker.id} onClick={() => setEditingWorker(worker)} className={`hover:bg-slate-50 cursor-pointer transition-colors group ${worker.isArchived ? 'opacity-50 grayscale' : ''}`}>
-                         <td className="px-6 py-4"><div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shadow-sm ${worker.contractType === ContractType.INDEFINIDO ? 'bg-slate-900 text-white' : 'bg-red-50 text-red-600'}`}>{worker.code}</div></td>
+                         <td className="px-6 py-4">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shadow-sm ${
+                                worker.contractType === ContractType.INDEFINIDO 
+                                ? 'bg-slate-900 text-white' 
+                                : (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA)
+                                    ? 'bg-blue-50 text-blue-600'
+                                    : 'bg-red-50 text-red-600'
+                            }`}>
+                                {worker.code}
+                            </div>
+                         </td>
                          <td className="px-6 py-4"><div><p className="text-sm font-black text-slate-900">{worker.name}</p><p className="text-[10px] font-bold text-slate-400 uppercase">{worker.role}</p></div></td>
                          <td className="px-6 py-4 text-xs font-bold text-slate-500">{worker.dni}</td>
                          <td className="px-6 py-4 text-xs font-bold text-slate-500">{worker.phone}</td>

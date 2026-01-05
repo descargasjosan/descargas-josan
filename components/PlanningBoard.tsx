@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText } from 'lucide-react';
 import { Job, PlanningState, Worker, WorkerStatus, ContractType } from '../types';
@@ -150,10 +149,11 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                 const targetJob = planning.jobs.find(j => j.id === selectorJobId);
                 const continuityGaps = targetJob ? checkContinuityRisk(worker, targetJob.date, planning.jobs, planning.customHolidays) : null;
                 
-                const isLeader = worker.role.toLowerCase().includes('jefe');
                 let itemClass = '';
-                if (worker.contractType === ContractType.FIJO) {
-                    itemClass = isLeader ? 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white' : 'bg-slate-100 text-slate-900 group-hover:bg-slate-800 group-hover:text-white';
+                if (worker.contractType === ContractType.INDEFINIDO) {
+                    itemClass = 'bg-slate-900 text-white group-hover:bg-slate-800';
+                } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
+                    itemClass = 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white';
                 } else {
                     itemClass = 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white';
                 }
@@ -418,10 +418,15 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                     });
                                     
                                     const continuityGaps = checkContinuityRisk(worker, date, planning.jobs, planning.customHolidays);
-                                    const isLeader = worker.role.toLowerCase().includes('jefe');
-                                    let codeColorClass = 'text-red-500';
-                                    if (worker.contractType === ContractType.FIJO) {
-                                        codeColorClass = isLeader ? 'text-blue-600' : 'text-slate-900';
+                                    
+                                    // COLORES UNIFICADOS EN TARJETA
+                                    let codeColorClass = '';
+                                    if (worker.contractType === ContractType.INDEFINIDO) {
+                                        codeColorClass = 'text-slate-900 font-black';
+                                    } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
+                                        codeColorClass = 'text-blue-600 font-black';
+                                    } else {
+                                        codeColorClass = 'text-red-600 font-black';
                                     }
 
                                     return (

@@ -73,18 +73,14 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
           // Detectar si se muestra porque volvió de una baja/vacaciones pero aún no se actualizó el estado
           const isTechnicallyInactive = worker.status !== WorkerStatus.ACTIVO && worker.status !== WorkerStatus.DISPONIBLE;
           
-          // Lógica de colores por Rol
-          const isLeader = worker.role.toLowerCase().includes('jefe');
-          let avatarClass = 'bg-white border-slate-200';
-          
-          if (worker.contractType === ContractType.FIJO) {
-             if (isLeader) {
-                 avatarClass += ' text-blue-600'; // Jefe de Equipo
-             } else {
-                 avatarClass += ' text-slate-900'; // Mozo Fijo
-             }
+          // Lógica de colores UNIFICADA
+          let avatarClass = '';
+          if (worker.contractType === ContractType.INDEFINIDO) {
+             avatarClass = 'bg-slate-900 text-white border-slate-900 shadow-md'; 
+          } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
+             avatarClass = 'bg-blue-50 text-blue-600 border-blue-100';
           } else {
-             avatarClass += ' text-red-500'; // Fijo Discontinuo
+             avatarClass = 'bg-red-50 text-red-600 border-red-100';
           }
 
           return (
@@ -101,7 +97,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
             >
               {/* CÓDIGO (Avatar pequeño) */}
               <div className={`
-                w-8 h-8 rounded-lg flex items-center justify-center font-black text-[10px] shrink-0 border shadow-sm relative
+                w-8 h-8 rounded-lg flex items-center justify-center font-black text-[10px] shrink-0 border relative
                 ${avatarClass}
               `}>
                 {worker.code}
