@@ -12,6 +12,7 @@ import WorkerSidebar from './components/WorkerSidebar';
 import PlanningBoard from './components/PlanningBoard';
 import StatisticsPanel from './components/StatisticsPanel';
 import CompactPlanningView from './components/CompactPlanningView'; // NUEVO IMPORT
+import LoginScreen from './components/LoginScreen';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS } from './constants';
 import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord } from './types';
 import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './utils';
@@ -35,6 +36,7 @@ interface CalendarSelectorProps {
   onGoToToday: () => void;
   jobs: Job[];
 }
+
 
 const CalendarSelector: React.FC<CalendarSelectorProps> = ({ currentDate, customHolidays, onSelect, onClose, onGoToToday, jobs }) => {
   const [viewDate, setViewDate] = useState(new Date(currentDate));
@@ -125,6 +127,23 @@ const CalendarSelector: React.FC<CalendarSelectorProps> = ({ currentDate, custom
 };
 
 const App: React.FC = () => {
+   const [session, setSession] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setIsAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
   const [view, setView] = useState<ViewType>('planning');
   
   // ESTADOS VISTA PLANNING (Diario vs Rango)
@@ -1071,6 +1090,17 @@ const App: React.FC = () => {
       }));
       showNotification("Registro de combustible eliminado", "success");
   };
+if (isAuthLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen />;
+  }
 
   return (
     <div className="flex h-screen bg-white overflow-hidden text-slate-900">
