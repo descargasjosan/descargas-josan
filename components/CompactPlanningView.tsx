@@ -39,6 +39,7 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
       .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
       .map(job => {
         const client = planning.clients.find(c => c.id === job.clientId);
+        const center = client?.centers.find(c => c.id === job.centerId);
         
         // Obtener todos los trabajos de hoy para detectar duplicados
         const dailyJobs = planning.jobs.filter(j => j.date === job.date && !j.isCancelled);
@@ -84,6 +85,7 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
           date: job.date,
           dateFormatted: formatDateDMY(job.date),
           clientName: client?.name || '---',
+          centerName: center?.name || '---',
           taskName: job.customName || job.type,
           startTime: job.startTime,
           requiredWorkers: job.requiredWorkers,
@@ -102,6 +104,7 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
     const wsData = rows.map(r => ({
       'Fecha': r.dateFormatted,
       'Cliente': r.clientName,
+      'Sede': r.centerName,
       'Tarea': r.taskName,
       'Hora Inicio Tarea': r.startTime,
       'Nº Ops': `${r.assignedCount}/${r.requiredWorkers}`,
@@ -111,7 +114,7 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
     
     const ws = XLSX.utils.json_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 12 }, { wch: 25 }, { wch: 30 }, { wch: 15 }, { wch: 8 }, { wch: 80 }, { wch: 12 }
+      { wch: 12 }, { wch: 35 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 8 }, { wch: 80 }, { wch: 12 }
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, "Planificación Compacta");
@@ -173,10 +176,11 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
         <table className="w-full text-left border-collapse">
           <thead className="sticky top-0 z-10 bg-slate-100 shadow-sm">
             <tr>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-28">Fecha</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-48">Cliente</th>
+              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-24">Fecha</th>
+              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-52">Cliente</th>
+              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-24">Sede</th>
               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-64">Tarea</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-24 text-center">Hora Inicio</th>
+              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-20 text-center">H. Inicio</th>
               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-20 text-center">Nº Ops</th>
               <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Operarios Asignados</th>
             </tr>
@@ -197,8 +201,11 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
                 <td className="px-3 py-2 border-r border-slate-200/50 font-bold text-slate-700 whitespace-nowrap">
                   {row.dateFormatted}
                 </td>
-                <td className="px-3 py-2 border-r border-slate-200/50 font-black text-slate-800 truncate max-w-[12rem]" title={row.clientName}>
+                <td className="px-3 py-2 border-r border-slate-200/50 font-black text-slate-800 truncate max-w-[13rem]" title={row.clientName}>
                   {row.clientName}
+                </td>
+                <td className="px-3 py-2 border-r border-slate-200/50 font-bold text-slate-500 truncate max-w-[6rem]" title={row.centerName}>
+                  {row.centerName}
                 </td>
                 <td className="px-3 py-2 border-r border-slate-200/50 font-medium text-slate-600 truncate max-w-[16rem]" title={row.taskName}>
                   {row.isCancelled ? <span className="text-red-600 font-black">[ANULADA] </span> : ''}
