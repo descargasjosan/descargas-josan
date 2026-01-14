@@ -121,7 +121,6 @@ export interface Job {
   endTime: string;
   requiredWorkers: number;
   assignedWorkerIds: string[];
-  workerTimes?: Record<string, string>; // workerId -> startTime (para refuerzos)
   ref?: string;
   deliveryNote?: string;
   locationDetails?: string;
@@ -144,4 +143,4 @@ export interface PlanningState {
   fuelRecords: FuelRecord[]; // NUEVO: Array para guardar los repostajes
 }
 
-export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact';
+export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases';

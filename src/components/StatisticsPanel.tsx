@@ -92,6 +92,9 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
           const isVacation = text.includes('vacaciones') || text.includes('fiesta') || text.includes('permiso') || text.includes('ausencia') || text.includes('vaca');
           
           if (isMedical || isVacation) {
+            // Evitar duplicar si ya tiene un trabajo ese día (opcional, pero ayuda al control)
+            const hasJobThisDay = activity.some(a => a.date === note.date && a.worker.id === selectedWorkerId);
+            
             activity.push({
               id: `absence-${note.id}`,
               date: note.date,
@@ -117,35 +120,34 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
     let totalManHours = 0;
 
     activeJobs.forEach(job => {
-      const effectiveEndTimeStr = (job.isFinished && job.actualEndTime) ? job.actualEndTime : job.endTime;
-      
-      const parseTime = (timeStr: string) => {
-        const [h, m] = timeStr.split(':').map(Number);
-        return h + (m || 0) / 60;
-      };
-
-      const endDec = parseTime(effectiveEndTimeStr);
-
-      job.assignedWorkerIds.forEach(wid => {
-          if (selectedWorkerId === 'all' || wid === selectedWorkerId) {
-              uniqueWorkers.add(wid);
-              
-              // CÁLCULO DE DURACIÓN INDIVIDUAL (REFUERZOS)
-              const startDec = parseTime(job.workerTimes?.[wid] || job.startTime);
-              let duration = endDec - startDec;
-              if (duration < 0) duration = 0;
-              totalManHours += duration;
+      job.assignedWorkerIds.forEach(id => {
+          if (selectedWorkerId === 'all' || id === selectedWorkerId) {
+              uniqueWorkers.add(id);
           }
       });
 
       if (!workersPerDay[job.date]) {
         workersPerDay[job.date] = new Set();
       }
-      job.assignedWorkerIds.forEach(wid => {
-          if (selectedWorkerId === 'all' || wid === selectedWorkerId) {
-              workersPerDay[job.date].add(wid);
+      job.assignedWorkerIds.forEach(id => {
+          if (selectedWorkerId === 'all' || id === selectedWorkerId) {
+              workersPerDay[job.date].add(id);
           }
       });
+
+      const parseTime = (timeStr: string) => {
+        const [h, m] = timeStr.split(':').map(Number);
+        return h + m / 60;
+      };
+
+      const effectiveEndTimeStr = (job.isFinished && job.actualEndTime) ? job.actualEndTime : job.endTime;
+      const startDec = parseTime(job.startTime);
+      const endDec = parseTime(effectiveEndTimeStr);
+      let duration = endDec - startDec;
+      if (duration < 0) duration = 0; 
+
+      const workersCount = selectedWorkerId === 'all' ? job.assignedWorkerIds.length : 1;
+      totalManHours += duration * workersCount;
     });
 
     const activeDays = Object.keys(workersPerDay).length;
@@ -208,7 +210,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
             'Estado': 'AUSENCIA'
            };
         }
-        const [h1, m1] = (item.job!.workerTimes?.[item.worker.id] || item.job!.startTime).split(':').map(Number);
+        const [h1, m1] = item.job!.startTime.split(':').map(Number);
         const [h2, m2] = (item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime).split(':').map(Number);
         let duration = (h2 + m2/60) - (h1 + m1/60);
         if(duration < 0) duration = 0;
@@ -220,7 +222,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
             'Cliente': item.clientName,
             'Sede': item.centerName,
             'Tarea': item.job!.customName || item.job!.type,
-            'Inicio': item.job!.workerTimes?.[item.worker.id] || item.job!.startTime,
+            'Inicio': item.job!.startTime,
             'Fin': item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime,
             'Duración (h)': duration.toFixed(2),
             'Estado': item.job!.isFinished ? 'FINALIZADA' : 'PENDIENTE'
@@ -248,7 +250,6 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                 'Estado': 'AUSENCIA'
             };
         }
-        const startTime = item.job!.workerTimes?.[item.worker.id] || item.job!.startTime;
         const endTime = (item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime);
         return {
             'Fecha': formatDateForExcel(item.date),
@@ -257,7 +258,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
             'Cliente': item.clientName,
             'Sede': item.centerName,
             'Tarea': item.job!.customName || item.job!.type,
-            'Horario': `${startTime} - ${endTime}`,
+            'Horario': `${item.job!.startTime} - ${endTime}`,
             'Estado': item.job!.isFinished ? 'FINALIZADA' : 'PENDIENTE'
         };
     });
@@ -604,7 +605,6 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                                );
                             }
                             
-                            const startTime = item.job!.workerTimes?.[item.worker.id] || item.job!.startTime;
                             const endTime = (item.job!.isFinished && item.job!.actualEndTime) ? item.job!.actualEndTime : item.job!.endTime;
                             return (
                                 <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
@@ -636,7 +636,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-2">
                                             <Clock className="w-3 h-3 text-slate-300" />
-                                            <span className="text-xs font-bold text-slate-500">{startTime} - {endTime}</span>
+                                            <span className="text-xs font-bold text-slate-500">{item.job!.startTime} - {endTime}</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">

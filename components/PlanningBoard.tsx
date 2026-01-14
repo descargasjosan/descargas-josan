@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText } from 'lucide-react';
 import { Job, PlanningState, Worker, WorkerStatus, ContractType } from '../types';
@@ -59,7 +60,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
 
   const handleDragOver = (e: React.DragEvent, jobId: string) => { e.preventDefault(); setDragOverJobId(jobId); };
   
-  const handleClientDragOver = (e: React.DragEvent, clientId: string) => { e.preventDefault(); setDragOverClientId(clientId); };
+  const handleClientDragOver = (e: React.DragEvent, clientId: string) => { e.preventDefault(); dragOverClientId !== clientId && setDragOverClientId(clientId); };
   
   const handleDrop = (e: React.DragEvent, targetId: string, type: 'job' | 'client') => { 
     e.preventDefault(); 
@@ -100,9 +101,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   const currentHmm = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
   const currentDateStr = currentTime.toISOString().split('T')[0];
 
-  // Calcular estadísticas globales (del primer día o acumuladas si se prefiere, aquí hacemos del primer día para simplificar la barra superior en modo diario)
-  // En modo rango, la barra superior podría mostrar totales o estar oculta/simplificada. 
-  // Mantendremos la lógica actual basada en el primer día del array para la barra superior por coherencia visual.
+  // Calcular estadísticas globales
   const referenceDate = datesToShow[0];
   const dailyJobsForStats = planning.jobs.filter(j => j.date === referenceDate);
   const activeDailyJobsForStats = dailyJobsForStats.filter(j => !j.isCancelled);
@@ -111,8 +110,14 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
 
   const stats = {
     total: activeWorkersStats.length,
-    jefes: activeWorkersStats.filter(w => w.contractType === ContractType.FIJO && w.role.toLowerCase().includes('jefe')).length,
-    mozos: activeWorkersStats.filter(w => w.contractType === ContractType.FIJO && !w.role.toLowerCase().includes('jefe')).length,
+    jefes: activeWorkersStats.filter(w => 
+      (w.contractType === ContractType.FIJO || w.contractType === ContractType.INDEFINIDO) && 
+      (w.role.toLowerCase().includes('jefe') || w.role.toLowerCase().includes('gerente') || w.role.toLowerCase().includes('director'))
+    ).length,
+    mozos: activeWorkersStats.filter(w => 
+      (w.contractType === ContractType.FIJO || w.contractType === ContractType.INDEFINIDO) && 
+      !(w.role.toLowerCase().includes('jefe') || w.role.toLowerCase().includes('gerente') || w.role.toLowerCase().includes('director'))
+    ).length,
     discontinuos: activeWorkersStats.filter(w => w.contractType === ContractType.FIJO_DISCONTINUO).length
   };
 
@@ -145,7 +150,6 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
             </div>
             <div className="max-h-[350px] overflow-y-auto p-2 custom-scrollbar">
               {filteredWorkers.map(worker => {
-                // Buscamos el trabajo actual para validar continuidad correctamente
                 const targetJob = planning.jobs.find(j => j.id === selectorJobId);
                 const continuityGaps = targetJob ? checkContinuityRisk(worker, targetJob.date, planning.jobs, planning.customHolidays) : null;
                 
@@ -175,10 +179,9 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
         </div>
       )}
 
-      {/* BARRA DE ESTADÍSTICAS COMPACTA (Solo visible si es 1 día o muestra datos del primer día del rango) */}
+      {/* BARRA DE ESTADÍSTICAS COMPACTA */}
       {datesToShow.length === 1 && (
         <div className="bg-white rounded-[20px] p-3 border border-slate-200 shadow-sm flex items-center justify-between gap-4 overflow-x-auto custom-scrollbar mb-2">
-           {/* ... (Estadísticas sin cambios) ... */}
            <div className="flex items-center gap-6">
               <div className="flex items-center gap-3 pr-6 border-r border-slate-100">
                  <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center shadow-md">
@@ -278,6 +281,16 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                             else if (dragOverJobId === job.id) containerClass += ' bg-blue-50 ring-2 ring-blue-500 z-10';
                             else containerClass += ' bg-white hover:bg-slate-50/50';
 
+                            // LÓGICA DE AGRUPACIÓN POR HORARIO DE OPERARIOS
+                            const groupedWorkerIds: Record<string, string[]> = {};
+                            job.assignedWorkerIds.forEach(wid => {
+                                const time = job.workerTimes?.[wid] || job.startTime;
+                                if (!groupedWorkerIds[time]) groupedWorkerIds[time] = [];
+                                groupedWorkerIds[time].push(wid);
+                            });
+                            // Ordenar tiempos (keys) para renderizado consistente
+                            const sortedTimes = Object.keys(groupedWorkerIds).sort();
+
                             return (
                               <div 
                                 key={job.id} 
@@ -294,7 +307,6 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                 onDrop={(e) => !isCancelled && handleDrop(e, job.id, 'job')}
                                 className={`flex flex-col lg:flex-row items-stretch lg:items-center ${containerClass}`}
                               >
-                                {/* ... (Etiquetas Estado) ... */}
                                 {isCancelled && (
                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                                      <div className="bg-red-100/90 text-red-600 px-4 py-1 rounded-full border border-red-200 font-black text-[10px] uppercase tracking-[0.2em] shadow-sm flex items-center gap-2 transform -rotate-2">
@@ -326,7 +338,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                   <p className="text-[11px] font-black text-slate-900 uppercase truncate leading-tight">{center?.name || 'Central'}</p>
                                 </div>
 
-                                {/* Columna ALBARÁN (NUEVA) */}
+                                {/* Columna ALBARÁN */}
                                 <div className="lg:w-28 px-4 py-2 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0">
                                   <div className="flex items-center gap-1.5 text-slate-400 mb-0.5">
                                     <FileText className="w-2.5 h-2.5" />
@@ -392,76 +404,81 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                   </div>
                                 </div>
 
-                                {/* Columna EQUIPO ASIGNADO (Flexible) */}
-                                <div className="flex-1 px-4 py-1.5 flex flex-wrap gap-1.5 items-center min-h-[44px]">
-                                  {job.assignedWorkerIds.map(workerId => {
-                                    const worker = planning.workers.find(w => w.id === workerId);
-                                    if (!worker) return null;
-
-                                    // BUSCAR NOTA PARA ESTE OPERARIO HOY
-                                    const dailyNote = planning.dailyNotes?.find(n => n.workerId === worker.id && n.date === date);
-
-                                    const workerDailyJobs = dailyJobs
-                                      .filter(j => j.assignedWorkerIds.includes(workerId))
-                                      .sort((a, b) => a.startTime.localeCompare(b.startTime));
-                                    
-                                    const isFirstJob = workerDailyJobs[0]?.id === job.id;
-                                    
-                                    const currentJobEndTime = getEffectiveEndTime(job);
-                                    const hasOverlap = dailyJobs.some(otherJob => {
-                                      if (otherJob.id === job.id) return false; 
-                                      if (otherJob.isCancelled) return false; 
-                                      if (!otherJob.assignedWorkerIds.includes(worker.id)) return false; 
-
-                                      const otherJobEndTime = getEffectiveEndTime(otherJob);
-                                      return isTimeOverlap(job.startTime, currentJobEndTime, otherJob.startTime, otherJobEndTime);
-                                    });
-                                    
-                                    const continuityGaps = checkContinuityRisk(worker, date, planning.jobs, planning.customHolidays);
-                                    
-                                    // COLORES UNIFICADOS EN TARJETA
-                                    let codeColorClass = '';
-                                    if (worker.contractType === ContractType.INDEFINIDO) {
-                                        codeColorClass = 'text-slate-900 font-black';
-                                    } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
-                                        codeColorClass = 'text-blue-600 font-black';
-                                    } else {
-                                        codeColorClass = 'text-red-600 font-black';
-                                    }
-
-                                    return (
-                                      <div 
-                                        key={worker.id} 
-                                        draggable={!isCancelled} 
-                                        onDragStart={(e) => {
-                                           e.stopPropagation(); 
-                                           if (!isCancelled) onDragStartFromBoard(worker.id, job.id);
-                                        }}
-                                        onContextMenu={(e) => handleContextMenu(e, worker.id)} // CLICK DERECHO
-                                        title={dailyNote ? dailyNote.text : undefined} // Tooltip simple con la nota
-                                        className={`flex items-center gap-1.5 pl-1.5 pr-0.5 py-0.5 rounded-lg border transition-all shadow-sm text-[10px] font-black uppercase relative ${!isCancelled ? 'cursor-grab active:cursor-grabbing' : ''} ${
-                                          hasOverlap ? 'bg-red-50 border-red-200 text-red-700 ring-1 ring-red-100' : 
-                                          !isFirstJob ? 'bg-green-50 border-green-200 text-green-700' : 
-                                          'bg-white border-slate-200 text-slate-700'
-                                        } ${dailyNote ? 'pr-2' : ''}`}
-                                      >
-                                        <span className={codeColorClass}>{worker.code}</span>
-                                        <span className="truncate max-w-[60px]">{worker.name.split(' ')[0]}</span>
-                                        
-                                        {/* ICONOS INDICADORES */}
-                                        {continuityGaps && <Euro className="w-2.5 h-2.5 text-amber-500" />}
-                                        
-                                        {/* INDICADOR DE NOTA */}
-                                        {dailyNote && (
-                                          <div className={`w-3 h-3 rounded-full flex items-center justify-center ml-0.5 ${dailyNote.type === 'medical' ? 'text-red-500' : 'text-amber-500'}`}>
-                                             {dailyNote.type === 'medical' ? <Stethoscope className="w-3 h-3" /> : <StickyNote className="w-3 h-3" />}
-                                          </div>
+                                {/* Columna EQUIPO ASIGNADO (Con soporte para franjas horarias / refuerzos) */}
+                                <div className="flex-1 px-4 py-2 flex flex-wrap gap-x-4 gap-y-2 items-center min-h-[44px]">
+                                  {sortedTimes.map(timeGroup => (
+                                     <div key={timeGroup} className="flex items-center gap-2 border-r border-slate-50 last:border-0 pr-4 last:pr-0">
+                                        {/* CABECERA DE FRANJA (Solo si es distinta a la de la tarea) */}
+                                        {timeGroup !== job.startTime && (
+                                            <div className="flex flex-col items-center justify-center mr-1">
+                                                <span className="text-[7px] font-black text-blue-600 uppercase leading-none mb-0.5">Refuerzo</span>
+                                                <span className="text-[9px] font-black text-slate-900 bg-blue-100 px-1 rounded leading-none">{timeGroup}</span>
+                                            </div>
                                         )}
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {groupedWorkerIds[timeGroup].map(workerId => {
+                                                const worker = planning.workers.find(w => w.id === workerId);
+                                                if (!worker) return null;
 
-                                        <button onClick={() => !isCancelled && onRemoveWorker(worker.id, job.id)} disabled={isCancelled} className={`p-0.5 ml-0.5 ${isCancelled ? 'opacity-0' : 'hover:text-red-500'}`}><X className="w-2.5 h-2.5" /></button>
-                                      </div>
-                                    );
-                                  })}
+                                                const dailyNote = planning.dailyNotes?.find(n => n.workerId === worker.id && n.date === date);
+                                                
+                                                // REFINADO: Detección de si es la primera tarea del día considerando tiempos de refuerzo
+                                                const workerDailyJobs = dailyJobs
+                                                  .filter(j => j.assignedWorkerIds.includes(workerId))
+                                                  .sort((a, b) => {
+                                                     const timeA = a.workerTimes?.[workerId] || a.startTime;
+                                                     const timeB = b.workerTimes?.[workerId] || b.startTime;
+                                                     return timeA.localeCompare(timeB);
+                                                  });
+                                                
+                                                const isFirstJob = workerDailyJobs[0]?.id === job.id;
+                                                const currentJobEndTime = getEffectiveEndTime(job);
+                                                const hasOverlap = dailyJobs.some(otherJob => {
+                                                  if (otherJob.id === job.id || otherJob.isCancelled || !otherJob.assignedWorkerIds.includes(worker.id)) return false; 
+                                                  const otherJobEndTime = getEffectiveEndTime(otherJob);
+                                                  const otherWorkerStartTime = otherJob.workerTimes?.[workerId] || otherJob.startTime;
+                                                  return isTimeOverlap(timeGroup, currentJobEndTime, otherWorkerStartTime, otherJobEndTime);
+                                                });
+                                                
+                                                const continuityGaps = checkContinuityRisk(worker, date, planning.jobs, planning.customHolidays);
+                                                
+                                                let codeColorClass = '';
+                                                if (worker.contractType === ContractType.INDEFINIDO) codeColorClass = 'text-slate-900 font-black';
+                                                else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) codeColorClass = 'text-blue-600 font-black';
+                                                else codeColorClass = 'text-red-600 font-black';
+
+                                                return (
+                                                  <div 
+                                                    key={worker.id} 
+                                                    draggable={!isCancelled} 
+                                                    onDragStart={(e) => {
+                                                       e.stopPropagation(); 
+                                                       if (!isCancelled) onDragStartFromBoard(worker.id, job.id);
+                                                    }}
+                                                    onContextMenu={(e) => handleContextMenu(e, worker.id)}
+                                                    title={dailyNote ? dailyNote.text : undefined}
+                                                    className={`flex items-center gap-1.5 pl-1.5 pr-0.5 py-0.5 rounded-lg border transition-all shadow-sm text-[10px] font-black uppercase relative ${!isCancelled ? 'cursor-grab active:cursor-grabbing' : ''} ${
+                                                      hasOverlap ? 'bg-red-50 border-red-200 text-red-700 ring-1 ring-red-100' : 
+                                                      !isFirstJob ? 'bg-green-100 border-green-300 text-green-800' : 
+                                                      'bg-white border-slate-200 text-slate-700'
+                                                    } ${dailyNote ? 'pr-2' : ''}`}
+                                                  >
+                                                    <span className={codeColorClass}>{worker.code}</span>
+                                                    <span className="truncate max-w-[60px]">{worker.name.split(' ')[0]}</span>
+                                                    
+                                                    {continuityGaps && <Euro className="w-2.5 h-2.5 text-amber-500" />}
+                                                    {dailyNote && (
+                                                      <div className={`w-3 h-3 rounded-full flex items-center justify-center ml-0.5 ${dailyNote.type === 'medical' ? 'text-red-500' : 'text-amber-500'}`}>
+                                                         {dailyNote.type === 'medical' ? <Stethoscope className="w-3 h-3" /> : <StickyNote className="w-3 h-3" />}
+                                                      </div>
+                                                    )}
+                                                    <button onClick={() => !isCancelled && onRemoveWorker(worker.id, job.id)} disabled={isCancelled} className={`p-0.5 ml-0.5 ${isCancelled ? 'opacity-0' : 'hover:text-red-500'}`}><X className="w-2.5 h-2.5" /></button>
+                                                  </div>
+                                                );
+                                            })}
+                                        </div>
+                                     </div>
+                                  ))}
                                   
                                   {!isFull && !isCancelled && !isFinishedManual && !isFinishedTime && (
                                     <button 
