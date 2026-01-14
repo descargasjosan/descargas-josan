@@ -1,4 +1,3 @@
-
 export enum WorkerStatus {
   ACTIVO = 'Activo',
   VACACIONES = 'Vacaciones',

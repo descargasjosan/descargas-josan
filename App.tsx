@@ -8,14 +8,15 @@ import {
   FileText, Briefcase, Archive, Phone, Filter, ArrowRight, LayoutList, Fuel, Euro, Table, RefreshCcw, Copy, Bus, Settings, CalendarPlus
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { supabase } from './supabaseClient';
 import WorkerSidebar from './components/WorkerSidebar';
 import PlanningBoard from './components/PlanningBoard';
 import StatisticsPanel from './components/StatisticsPanel';
-import CompactPlanningView from './components/CompactPlanningView';
+import CompactPlanningView from './components/CompactPlanningView'; // NUEVO IMPORT
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS } from './constants';
 import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord } from './types';
 import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './utils';
+import { supabase } from './supabaseClient';
+
 
 // --- LISTADO DE CARGOS DEFINITIVO ---
 const WORKER_ROLES = [
@@ -819,6 +820,7 @@ const App: React.FC = () => {
       endTime: '12:00',
       requiredWorkers: 2,
       assignedWorkerIds: [],
+      workerTimes: {},
       ref: '',
       deliveryNote: '', 
       locationDetails: ''
@@ -861,7 +863,8 @@ const App: React.FC = () => {
       cancellationReason: '',
       isFinished: false, 
       actualEndTime: undefined,
-      assignedWorkerIds: keepWorkersOnDuplicate ? duplicatingJob.assignedWorkerIds : [] 
+      assignedWorkerIds: keepWorkersOnDuplicate ? duplicatingJob.assignedWorkerIds : [],
+      workerTimes: keepWorkersOnDuplicate ? { ...duplicatingJob.workerTimes } : {}
     };
 
     setPlanning(prev => ({ ...prev, jobs: [...prev.jobs, newJob] }));
@@ -887,9 +890,15 @@ const App: React.FC = () => {
       ...prev,
       jobs: prev.jobs.map(j => {
         let assigned = j.assignedWorkerIds;
-        if (sourceJobId && j.id === sourceJobId) assigned = assigned.filter(id => id !== workerId);
-        if (j.id === jobId) assigned = [...assigned.filter(id => id !== workerId), workerId];
-        return { ...j, assignedWorkerIds: assigned };
+        let workerTimes = { ...j.workerTimes };
+        if (sourceJobId && j.id === sourceJobId) {
+            assigned = assigned.filter(id => id !== workerId);
+            if (workerTimes[workerId]) delete workerTimes[workerId];
+        }
+        if (j.id === jobId) {
+            assigned = [...assigned.filter(id => id !== workerId), workerId];
+        }
+        return { ...j, assignedWorkerIds: assigned, workerTimes };
       })
     }));
     if (!validation.warning) showNotification("Mozo asignado", "success");
@@ -902,11 +911,18 @@ const App: React.FC = () => {
   const handleRemoveWorker = (workerId: string, jobId: string) => {
     setPlanning(prev => ({
       ...prev,
-      jobs: prev.jobs.map(j => 
-        j.id === jobId 
-          ? { ...j, assignedWorkerIds: j.assignedWorkerIds.filter(id => id !== workerId) } 
-          : j
-      )
+      jobs: prev.jobs.map(j => {
+        if (j.id === jobId) {
+            const workerTimes = { ...j.workerTimes };
+            if (workerTimes[workerId]) delete workerTimes[workerId];
+            return { 
+                ...j, 
+                assignedWorkerIds: j.assignedWorkerIds.filter(id => id !== workerId),
+                workerTimes
+            };
+        }
+        return j;
+      })
     }));
   };
 
@@ -1104,6 +1120,9 @@ const App: React.FC = () => {
             <button onClick={() => setView('planning')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'planning' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Planificación">
                <CalendarIcon className="w-6 h-6" />
             </button>
+            <button onClick={() => setView('compact')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'compact' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Vista Compacta">
+               <Table className="w-6 h-6" />
+            </button>
             <button onClick={() => setShowSSReport(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Reporte SS">
                <ListTodo className="w-6 h-6" />
             </button>
@@ -1223,6 +1242,10 @@ const App: React.FC = () => {
            </>
          )}
 
+         {view === 'compact' && (
+            <CompactPlanningView planning={planning} />
+         )}
+
          {view === 'workers' && (
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
@@ -1318,25 +1341,22 @@ const App: React.FC = () => {
                </button>
              </div>
              
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+             {/* REDISEÑO COMPACTO DE FICHAS DE CLIENTES */}
+             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                 {planning.clients.map(client => (
-                  <div key={client.id} onClick={() => setEditingClient(client)} className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm cursor-pointer hover:shadow-md transition-all group">
-                     <div className="flex items-center justify-between mb-4">
-                        <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center font-black text-xs text-slate-900 group-hover:bg-slate-900 group-hover:text-white transition-colors">
+                  <div key={client.id} onClick={() => setEditingClient(client)} className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm cursor-pointer hover:shadow-md transition-all group flex flex-col justify-between h-32">
+                     <div className="flex items-center justify-between">
+                        <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center font-black text-xs text-slate-900 group-hover:bg-slate-900 group-hover:text-white transition-colors">
                            {client.logo}
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); setEditingClient(client); }} className="p-2 text-slate-300 hover:text-blue-600 transition-colors"><Edit2 className="w-4 h-4" /></button>
+                        <button onClick={(e) => { e.stopPropagation(); setEditingClient(client); }} className="p-1.5 text-slate-300 hover:text-blue-600 transition-colors"><Edit2 className="w-3.5 h-3.5" /></button>
                      </div>
-                     <h3 className="text-lg font-black text-slate-900 mb-1">{client.name}</h3>
-                     <p className="text-xs font-bold text-slate-400 mb-4">{client.location}</p>
-                     
-                     <div className="space-y-2">
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 bg-slate-50 p-2 rounded-xl">
-                           <MapPin className="w-3 h-3" /> {client.centers.length} Sedes
-                        </div>
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 bg-slate-50 p-2 rounded-xl">
-                           <Users className="w-3 h-3" /> {client.contactPerson}
-                        </div>
+                     <div className="mt-2">
+                        <h3 className="text-xs font-black text-slate-900 truncate" title={client.name}>{client.name}</h3>
+                        <p className="text-[9px] font-bold text-slate-400 truncate uppercase">{client.location}</p>
+                     </div>
+                     <div className="mt-2 pt-2 border-t border-slate-50 flex items-center gap-2 text-[8px] font-black text-slate-500 uppercase">
+                        <MapPin className="w-2.5 h-2.5 text-blue-500" /> {client.centers.length} Sedes
                      </div>
                   </div>
                 ))}
@@ -1420,7 +1440,7 @@ const App: React.FC = () => {
 
       {duplicatingJob && (
           <div className="fixed inset-0 z-[300] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDuplicatingJob(null)}>
-             <div className="bg-white w-full max-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+             <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                 <h3 className="text-lg font-black text-slate-900 italic uppercase mb-4">Duplicar Tarea</h3>
                 <div className="space-y-4">
                    <div>
@@ -1699,6 +1719,48 @@ const App: React.FC = () => {
                         <input type="number" min="1" className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none text-center" value={editingJob.requiredWorkers} onChange={e => setEditingJob({...editingJob, requiredWorkers: parseInt(e.target.value) || 1})} />
                     </div>
                  </div>
+
+                 {/* GESTIÓN DE HORARIOS INDIVIDUALES (REFUERZOS) */}
+                 {editingJob.assignedWorkerIds.length > 0 && (
+                     <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
+                        <h4 className="text-[10px] font-black uppercase text-blue-800 flex items-center gap-2 mb-2">
+                           <Clock className="w-3 h-3" /> Gestión de Refuerzos / Horarios
+                        </h4>
+                        <div className="space-y-2">
+                           {editingJob.assignedWorkerIds.map(wid => {
+                              const worker = planning.workers.find(w => w.id === wid);
+                              if (!worker) return null;
+                              return (
+                                 <div key={wid} className="flex items-center justify-between gap-4 bg-white p-2 rounded-xl border border-blue-100 shadow-sm">
+                                    <div className="flex items-center gap-2 shrink-0">
+                                       <div className="w-6 h-6 rounded bg-slate-900 text-white text-[9px] font-black flex items-center justify-center uppercase">{worker.code}</div>
+                                       <span className="text-[10px] font-bold text-slate-700 truncate w-24">{worker.name.split(' ')[0]}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-1 justify-end">
+                                       <span className="text-[9px] font-black text-slate-400 uppercase">H. Inicio:</span>
+                                       <input 
+                                          type="time" 
+                                          className="bg-slate-50 p-1 rounded-md text-[10px] font-black text-blue-600 outline-none border border-transparent focus:border-blue-300"
+                                          value={editingJob.workerTimes?.[wid] || ''}
+                                          placeholder={editingJob.startTime}
+                                          onChange={(e) => {
+                                             const newTimes = { ...(editingJob.workerTimes || {}) };
+                                             if (e.target.value) {
+                                                newTimes[wid] = e.target.value;
+                                             } else {
+                                                delete newTimes[wid];
+                                             }
+                                             setEditingJob({ ...editingJob, workerTimes: newTimes });
+                                          }}
+                                       />
+                                    </div>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                        <p className="text-[8px] font-bold text-blue-400 italic">Si dejas el campo vacío, se usará la hora general ({editingJob.startTime})</p>
+                     </div>
+                 )}
 
                  <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
                      <div className={`p-3 rounded-xl border transition-all ${editingJob.isFinished ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100'}`}>
@@ -2156,7 +2218,7 @@ const App: React.FC = () => {
                   <button onClick={exportBackup} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-blue-50 hover:text-blue-600 flex items-center justify-center gap-2"><DownloadCloud className="w-4 h-4" /> Exportar Backup JSON</button>
                   <button onClick={exportDatabaseToExcel} className="w-full py-4 bg-green-50 rounded-2xl font-black text-xs uppercase tracking-widest text-green-600 hover:bg-green-100 flex items-center justify-center gap-2"><FileSpreadsheet className="w-4 h-4" /> Exportar Todo a Excel</button>
                   <button onClick={() => backupInputRef.current?.click()} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-blue-50 hover:text-blue-600 flex items-center justify-center gap-2"><Upload className="w-4 h-4" /> Importar Excel / JSON</button>
-                  <button onClick={handleResetData} className="w-full py-4 bg-red-50 rounded-2xl font-black text-xs uppercase tracking-widest text-red-600 hover:bg-red-100 flex items-center justify-center gap-2"><X className="w-4 h-4" /> Resetear Datos</button>
+                  <button onClick={downloadExcelTemplate} className="w-full py-4 bg-purple-50 rounded-2xl font-black text-xs uppercase tracking-widest text-purple-600 hover:bg-purple-100 flex items-center justify-center gap-2"><Table className="w-4 h-4" /> Descargar Plantilla</button>
                </div>
             </div>
          </div>

@@ -174,15 +174,15 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
 
       <div className="flex-1 overflow-auto custom-scrollbar p-0">
         <table className="w-full text-left border-collapse">
-          <thead className="sticky top-0 z-10 bg-slate-100 shadow-sm">
+          <thead className="sticky top-0 z-10 bg-slate-900 shadow-md">
             <tr>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-24">Fecha</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-52">Cliente</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-24">Sede</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-64">Tarea</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-20 text-center">H. Inicio</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 w-20 text-center">Nº Ops</th>
-              <th className="px-3 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Operarios Asignados</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-24">Fecha</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-52">Cliente</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-24">Sede</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-64">Tarea</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-20 text-center">H. Inicio</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800 w-20 text-center">Nº Ops</th>
+              <th className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-widest border-b border-slate-800">Operarios Asignados</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
