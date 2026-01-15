@@ -1,3 +1,4 @@
+
 export enum WorkerStatus {
   ACTIVO = 'Activo',
   VACACIONES = 'Vacaciones',
@@ -120,7 +121,6 @@ export interface Job {
   endTime: string;
   requiredWorkers: number;
   assignedWorkerIds: string[];
-  workerTimes?: Record<string, string>; // workerId -> startTime (para refuerzos)
   ref?: string;
   deliveryNote?: string;
   locationDetails?: string;

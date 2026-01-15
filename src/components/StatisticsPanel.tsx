@@ -2,10 +2,10 @@
 import React, { useState, useMemo } from 'react';
 import { 
   BarChart3, Users, Clock, CalendarDays, Filter, Building2, MapPin, 
-  TrendingUp, Activity, Calculator, ArrowRight, Ban, X, FileText, AlertCircle, Download, FileSpreadsheet, User, Briefcase, CheckCircle2, Stethoscope, StickyNote
+  TrendingUp, Activity, Calculator, ArrowRight, Ban, X, FileText, AlertCircle, Download, FileSpreadsheet, User, Briefcase, CheckCircle2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PlanningState, Job, Worker, NoteType } from '../types';
+import { PlanningState, Job, Worker } from '../types';
 import { formatDateDMY } from '../utils';
 
 interface StatisticsPanelProps {
@@ -22,16 +22,19 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
   const [endDate, setEndDate] = useState(lastDay);
   const [selectedClientId, setSelectedClientId] = useState<string>('all');
   const [selectedCenterId, setSelectedCenterId] = useState<string>('all');
-  const [selectedWorkerId, setSelectedWorkerId] = useState<string>('all'); 
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string>('all'); // NUEVO: Filtro por trabajador
   
+  // Estado para controlar si se muestra el detalle de anulaciones
   const [showCancelledDetails, setShowCancelledDetails] = useState(false);
 
+  // Workers sorted for dropdown
   const sortedWorkers = useMemo(() => {
     return [...planning.workers]
         .filter(w => !w.isArchived)
         .sort((a, b) => a.name.localeCompare(b.name));
   }, [planning.workers]);
 
+  // --- LÓGICA DE FILTRADO BASE ---
   const jobsInScope = useMemo(() => {
     return planning.jobs.filter(job => {
       if (job.date < startDate || job.date > endDate) return false;
@@ -42,23 +45,21 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
     });
   }, [planning.jobs, startDate, endDate, selectedClientId, selectedCenterId, selectedWorkerId]);
 
+  // --- SEPARACIÓN DE ESTADOS ---
   const activeJobs = useMemo(() => jobsInScope.filter(j => !j.isCancelled), [jobsInScope]);
   const cancelledJobs = useMemo(() => jobsInScope.filter(j => j.isCancelled), [jobsInScope]);
 
+  // --- ACTIVIDAD APLANADA (Para listado detallado y Excel) ---
   const flattenedActivity = useMemo(() => {
     const activity: Array<{
       id: string;
       date: string;
       worker: Worker;
-      job?: Job;
+      job: Job;
       clientName: string;
       centerName: string;
-      isAbsence?: boolean;
-      absenceType?: string;
-      noteText?: string;
     }> = [];
 
-    // 1. Agregar trabajos activos
     activeJobs.forEach(job => {
       const client = planning.clients.find(c => c.id === job.clientId);
       const center = client?.centers.find(ct => ct.id === job.centerId);
@@ -80,40 +81,11 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
       });
     });
 
-    // 2. Agregar Ausencias (solo si hay un trabajador seleccionado)
-    if (selectedWorkerId !== 'all') {
-      const worker = planning.workers.find(w => w.id === selectedWorkerId);
-      if (worker) {
-        const notes = planning.dailyNotes?.filter(n => n.workerId === selectedWorkerId && n.date >= startDate && n.date <= endDate) || [];
-        
-        notes.forEach(note => {
-          const text = note.text.toLowerCase();
-          const isMedical = note.type === 'medical';
-          const isVacation = text.includes('vacaciones') || text.includes('fiesta') || text.includes('permiso') || text.includes('ausencia') || text.includes('vaca');
-          
-          if (isMedical || isVacation) {
-            // Evitar duplicar si ya tiene un trabajo ese día (opcional, pero ayuda al control)
-            const hasJobThisDay = activity.some(a => a.date === note.date && a.worker.id === selectedWorkerId);
-            
-            activity.push({
-              id: `absence-${note.id}`,
-              date: note.date,
-              worker,
-              clientName: 'AUSENCIA',
-              centerName: 'REGISTRO INTERNO',
-              isAbsence: true,
-              absenceType: isMedical ? 'BAJA MÉDICA' : 'VACACIONES / PERMISO',
-              noteText: note.text
-            });
-          }
-        });
-      }
-    }
-
     return activity.sort((a, b) => b.date.localeCompare(a.date) || a.worker.name.localeCompare(b.worker.name));
-  }, [activeJobs, planning.workers, planning.clients, planning.dailyNotes, selectedWorkerId, startDate, endDate]);
+  }, [activeJobs, planning.workers, planning.clients, selectedWorkerId]);
 
 
+  // --- CÁLCULOS ESTADÍSTICOS ---
   const stats = useMemo(() => {
     const uniqueWorkers = new Set<string>();
     const workersPerDay: Record<string, Set<string>> = {};
@@ -170,12 +142,14 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
   const selectedClient = planning.clients.find(c => c.id === selectedClientId);
   const selectedWorker = planning.workers.find(w => w.id === selectedWorkerId);
 
+  // --- HELPER FORMATO FECHA EXCEL (DD/MM/AAAA) ---
   const formatDateForExcel = (dateStr: string) => {
     if (!dateStr) return '';
     const [y, m, d] = dateStr.split('-');
     return `${d}/${m}/${y}`;
   };
 
+  // --- 1. EXPORTACIÓN COMPLETA (GLOBAL) ---
   const exportStatsToExcel = () => {
     const wb = XLSX.utils.book_new();
 
@@ -196,22 +170,8 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
     XLSX.utils.book_append_sheet(wb, wsSummary, "Resumen KPI");
 
     const detailedData = flattenedActivity.map(item => {
-        if (item.isAbsence) {
-           return {
-            'Fecha': formatDateForExcel(item.date),
-            'Código Operario': item.worker.code,
-            'Nombre Operario': item.worker.name,
-            'Cliente': 'AUSENCIA',
-            'Sede': '-',
-            'Tarea': item.absenceType,
-            'Inicio': '-',
-            'Fin': '-',
-            'Duración (h)': '0.00',
-            'Estado': 'AUSENCIA'
-           };
-        }
-        const [h1, m1] = item.job!.startTime.split(':').map(Number);
-        const [h2, m2] = (item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime).split(':').map(Number);
+        const [h1, m1] = item.job.startTime.split(':').map(Number);
+        const [h2, m2] = (item.job.isFinished && item.job.actualEndTime ? item.job.actualEndTime : item.job.endTime).split(':').map(Number);
         let duration = (h2 + m2/60) - (h1 + m1/60);
         if(duration < 0) duration = 0;
 
@@ -221,82 +181,117 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
             'Nombre Operario': item.worker.name,
             'Cliente': item.clientName,
             'Sede': item.centerName,
-            'Tarea': item.job!.customName || item.job!.type,
-            'Inicio': item.job!.startTime,
-            'Fin': item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime,
+            'Tarea': item.job.customName || item.job.type,
+            'Inicio': item.job.startTime,
+            'Fin': item.job.isFinished && item.job.actualEndTime ? item.job.actualEndTime : item.job.endTime,
             'Duración (h)': duration.toFixed(2),
-            'Estado': item.job!.isFinished ? 'FINALIZADA' : 'PENDIENTE'
+            'Estado': item.job.isFinished ? 'FINALIZADA' : 'PENDIENTE'
         };
     });
     const wsDetailed = XLSX.utils.json_to_sheet(detailedData);
     XLSX.utils.book_append_sheet(wb, wsDetailed, "Detalle Actividad Operarios");
 
+    const cancelledData = cancelledJobs.map(j => {
+       const client = planning.clients.find(c => c.id === j.clientId);
+       const center = client?.centers.find(ct => ct.id === j.centerId);
+       return {
+          'Fecha': formatDateForExcel(j.date),
+          'Cliente': client?.name || '---',
+          'Sede': center?.name || '---',
+          'Tarea': j.customName || j.type,
+          'Horario Previsto': `${j.startTime} - ${j.endTime}`,
+          'Operarios Previstos': j.requiredWorkers,
+          'Motivo Anulación': j.cancellationReason || ''
+       };
+    });
+    const wsCancelled = XLSX.utils.json_to_sheet(cancelledData);
+    XLSX.utils.book_append_sheet(wb, wsCancelled, "Servicios Anulados");
+
     const fileName = `Informe_Completo_${formatDateForExcel(startDate).replace(/\//g, '-')}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
+  // --- 2. EXPORTACIÓN SOLO LISTADO OPERARIOS (INDEPENDIENTE) ---
   const exportActivityList = () => {
     const wb = XLSX.utils.book_new();
+    
     const detailedData = flattenedActivity.map(item => {
-        if (item.isAbsence) {
-            return {
-                'Fecha': formatDateForExcel(item.date),
-                'Código Operario': item.worker.code,
-                'Nombre Operario': item.worker.name,
-                'Cliente': 'AUSENCIA',
-                'Sede': '-',
-                'Tarea': item.absenceType,
-                'Horario': '-',
-                'Estado': 'AUSENCIA'
-            };
-        }
-        const endTime = (item.job!.isFinished && item.job!.actualEndTime ? item.job!.actualEndTime : item.job!.endTime);
+        const [h1, m1] = item.job.startTime.split(':').map(Number);
+        const [h2, m2] = (item.job.isFinished && item.job.actualEndTime ? item.job.actualEndTime : item.job.endTime).split(':').map(Number);
+        let duration = (h2 + m2/60) - (h1 + m1/60);
+        if(duration < 0) duration = 0;
+
         return {
             'Fecha': formatDateForExcel(item.date),
             'Código Operario': item.worker.code,
             'Nombre Operario': item.worker.name,
             'Cliente': item.clientName,
             'Sede': item.centerName,
-            'Tarea': item.job!.customName || item.job!.type,
-            'Horario': `${item.job!.startTime} - ${endTime}`,
-            'Estado': item.job!.isFinished ? 'FINALIZADA' : 'PENDIENTE'
+            'Tarea': item.job.customName || item.job.type,
+            'Inicio': item.job.startTime,
+            'Fin': item.job.isFinished && item.job.actualEndTime ? item.job.actualEndTime : item.job.endTime,
+            'Duración (h)': duration.toFixed(2),
+            'Estado': item.job.isFinished ? 'FINALIZADA' : 'PENDIENTE'
         };
     });
+    
     const wsDetailed = XLSX.utils.json_to_sheet(detailedData);
     XLSX.utils.book_append_sheet(wb, wsDetailed, "Listado Operarios");
-    XLSX.writeFile(wb, `Listado_Actividad_${startDate}.xlsx`);
+
+    const fileName = selectedWorker 
+        ? `Listado_${selectedWorker.name.replace(/ /g, '_')}_${startDate}.xlsx`
+        : `Listado_Actividad_Global_${startDate}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
   };
 
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50/50 flex flex-col h-full custom-scrollbar">
       
+      {/* 1. BARRA DE CONTROL Y FILTROS */}
       <div className="bg-white border-b border-slate-200 px-8 py-6 sticky top-0 z-20 shadow-sm">
          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
             
+            {/* Título */}
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 text-white">
                 <BarChart3 className="w-6 h-6" />
               </div>
               <div>
                 <h2 className="text-xl font-black text-slate-900 italic uppercase tracking-tighter leading-none">Análisis Operativo</h2>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Estadísticas y Rendimiento</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                  Estadísticas y Rendimiento
+                </p>
               </div>
             </div>
 
+            {/* Area de Filtros y Acciones */}
             <div className="flex items-center gap-4">
               <div className="flex flex-wrap items-center gap-3 bg-slate-50 p-2 rounded-2xl border border-slate-100">
                 
+                {/* Fechas */}
                 <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-sm">
                     <CalendarDays className="w-4 h-4 text-slate-400" />
                     <div className="flex items-center gap-2">
-                      <input type="date" className="text-[10px] font-bold text-slate-700 bg-transparent outline-none uppercase cursor-pointer" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                      <input 
+                        type="date" 
+                        className="text-[10px] font-bold text-slate-700 bg-transparent outline-none uppercase cursor-pointer"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                      />
                       <ArrowRight className="w-3 h-3 text-slate-300" />
-                      <input type="date" className="text-[10px] font-bold text-slate-700 bg-transparent outline-none uppercase cursor-pointer" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                      <input 
+                        type="date" 
+                        className="text-[10px] font-bold text-slate-700 bg-transparent outline-none uppercase cursor-pointer"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                      />
                     </div>
                 </div>
 
                 <div className="w-px h-8 bg-slate-200 mx-1" />
 
+                {/* Selector Cliente */}
                 <div className="relative group">
                   <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-hover:text-blue-500 transition-colors" />
                   <select 
@@ -310,6 +305,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                   <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-300 pointer-events-none" />
                 </div>
 
+                {/* Selector Sede (Dependiente) */}
                 <div className={`relative group ${selectedClientId === 'all' ? 'opacity-50 pointer-events-none' : ''}`}>
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-hover:text-blue-500 transition-colors" />
                   <select 
@@ -326,6 +322,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
 
                 <div className="w-px h-8 bg-slate-200 mx-1" />
 
+                {/* Selector Trabajador (NUEVO) */}
                 <div className="relative group">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-hover:text-blue-500 transition-colors" />
                   <select 
@@ -341,18 +338,29 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
 
               </div>
 
-              <button onClick={exportStatsToExcel} className="bg-green-50 text-green-700 border border-green-200 p-3 rounded-2xl hover:bg-green-600 hover:text-white transition-all shadow-sm group" title="Descargar Informe Completo (KPI + Listados)">
+              {/* Botón Exportar Informe Completo */}
+              <button 
+                onClick={exportStatsToExcel}
+                className="bg-green-50 text-green-700 border border-green-200 p-3 rounded-2xl hover:bg-green-600 hover:text-white transition-all shadow-sm group"
+                title="Descargar Informe Completo (KPI + Listados)"
+              >
                 <FileSpreadsheet className="w-5 h-5" />
               </button>
             </div>
          </div>
       </div>
 
+      {/* 2. CONTENIDO PRINCIPAL SCROLLABLE */}
       <div className="p-8">
         
+        {/* KPI CARDS */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-10">
            
-           <div onClick={() => setShowCancelledDetails(false)} className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${!showCancelledDetails && selectedWorkerId === 'all' ? 'border-blue-200 ring-4 ring-blue-50' : 'border-slate-100'}`}>
+           {/* KPI 1 */}
+           <div 
+             onClick={() => setShowCancelledDetails(false)}
+             className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${!showCancelledDetails && selectedWorkerId === 'all' ? 'border-blue-200 ring-4 ring-blue-50' : 'border-slate-100'}`}
+           >
               <div className="absolute right-0 top-0 w-32 h-32 bg-blue-50 rounded-full -mr-10 -mt-10 group-hover:bg-blue-100 transition-colors" />
               <div className="relative z-10">
                 <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-blue-600 shadow-sm mb-4">
@@ -377,6 +385,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
               </div>
            </div>
 
+           {/* KPI 2 */}
            <div className="bg-white rounded-[32px] p-6 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
               <div className="absolute right-0 top-0 w-32 h-32 bg-purple-50 rounded-full -mr-10 -mt-10 group-hover:bg-purple-100 transition-colors" />
               <div className="relative z-10">
@@ -406,6 +415,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
               </div>
            </div>
 
+           {/* KPI 3 */}
            <div className="bg-white rounded-[32px] p-6 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
               <div className="absolute right-0 top-0 w-32 h-32 bg-emerald-50 rounded-full -mr-10 -mt-10 group-hover:bg-emerald-100 transition-colors" />
               <div className="relative z-10">
@@ -422,7 +432,11 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
               </div>
            </div>
 
-           <div onClick={() => setShowCancelledDetails(!showCancelledDetails)} className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${showCancelledDetails ? 'border-red-300 ring-4 ring-red-50' : 'border-slate-100'}`}>
+           {/* KPI 4 */}
+           <div 
+             onClick={() => setShowCancelledDetails(!showCancelledDetails)}
+             className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${showCancelledDetails ? 'border-red-300 ring-4 ring-red-50' : 'border-slate-100'}`}
+           >
               <div className="absolute right-0 top-0 w-32 h-32 bg-red-50 rounded-full -mr-10 -mt-10 group-hover:bg-red-100 transition-colors" />
               <div className="relative z-10">
                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm mb-4 transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-white text-red-600'}`}>
@@ -436,13 +450,18 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                    <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700'}`}>
                       {showCancelledDetails ? 'Ver Detalle' : `Tasa: ${cancellationRate}%`}
                    </span>
+                   <span className="text-[9px] text-slate-400 font-bold uppercase truncate">
+                      {showCancelledDetails ? 'Click para cerrar' : 'Click para ver listado'}
+                   </span>
                 </div>
               </div>
            </div>
 
         </div>
 
+        {/* CONTENIDO VARIABLE */}
         {showCancelledDetails ? (
+           // VISTA DE LISTADO DETALLADO DE ANULACIONES
            <div className="bg-white rounded-[32px] border border-red-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
               <div className="p-8 border-b border-red-50 bg-red-50/30 flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -529,6 +548,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
               </div>
            </div>
         ) : (
+            // VISTA HISTORIAL DETALLADO (Para 'Todos' o 'Un Operario')
             <div className="bg-white rounded-[32px] border border-blue-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
                 <div className="p-8 border-b border-blue-50 bg-blue-50/30 flex items-center justify-between">
                     <div className="flex items-center gap-4">
@@ -537,7 +557,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                         </div>
                         <div>
                             <h3 className="text-lg font-black text-blue-900 uppercase italic">
-                                {selectedWorkerId === 'all' ? 'Registro Actividad Operarios' : 'Historial Individual (Tareas y Ausencias)'}
+                                {selectedWorkerId === 'all' ? 'Registro Actividad Operarios' : 'Historial Individual'}
                             </h3>
                             <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">
                                 {selectedWorkerId === 'all' 
@@ -547,6 +567,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                             </p>
                         </div>
                     </div>
+                    {/* BOTÓN EXPORTAR LISTADO INDEPENDIENTE */}
                     <button 
                         onClick={exportActivityList}
                         className="flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 hover:bg-blue-600 hover:text-white rounded-xl transition-all font-black text-[10px] uppercase tracking-widest shadow-sm"
@@ -561,51 +582,18 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                         <tr className="bg-blue-50 border-b border-blue-100">
                             <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Fecha</th>
                             <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Operario</th>
-                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Cliente / Sede</th>
-                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Tarea / Ausencia</th>
-                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Horario / Nota</th>
+                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Cliente</th>
+                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Sede</th>
+                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Tarea</th>
+                            <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50">Horario</th>
                             <th className="px-6 py-4 text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-50 text-right">Estado</th>
                         </tr>
                         </thead>
                         <tbody className="divide-y divide-blue-50">
                         {flattenedActivity.map(item => {
-                            if (item.isAbsence) {
-                               return (
-                                <tr key={item.id} className="bg-amber-50/40 hover:bg-amber-100/50 transition-colors italic">
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-2">
-                                            <CalendarDays className="w-4 h-4 text-amber-400" />
-                                            <span className="text-xs font-black text-slate-700">{formatDateDMY(item.date)}</span>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-6 h-6 rounded bg-amber-100 flex items-center justify-center text-[9px] font-black text-amber-600">
-                                                {item.worker.code}
-                                            </div>
-                                            <span className="text-xs font-bold text-slate-700">{item.worker.name}</span>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <span className="text-[10px] font-black text-amber-600 uppercase bg-white px-2 py-1 rounded border border-amber-100">AUSENCIA</span>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-2">
-                                           {item.absenceType?.includes('BAJA') ? <Stethoscope className="w-3 h-3 text-red-400" /> : <Briefcase className="w-3 h-3 text-blue-400" />}
-                                           <span className="text-xs font-black text-slate-800 uppercase tracking-tight">{item.absenceType}</span>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <p className="text-[10px] text-slate-500 font-medium truncate max-w-xs" title={item.noteText}>{item.noteText || '-'}</p>
-                                    </td>
-                                    <td className="px-6 py-4 text-right">
-                                        <span className="text-[9px] font-black text-amber-700 bg-amber-100 px-2 py-1 rounded-lg uppercase">REGISTRADA</span>
-                                    </td>
-                                </tr>
-                               );
-                            }
-                            
-                            const endTime = (item.job!.isFinished && item.job!.actualEndTime) ? item.job!.actualEndTime : item.job!.endTime;
+                            // Calc real duration for this job
+                            const endTime = (item.job.isFinished && item.job.actualEndTime) ? item.job.actualEndTime : item.job.endTime;
+
                             return (
                                 <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
                                     <td className="px-6 py-4">
@@ -623,24 +611,27 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
-                                        <div>
-                                            <p className="text-xs font-black text-slate-900">{item.clientName}</p>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">{item.centerName}</p>
+                                        <span className="text-xs font-black text-slate-900">{item.clientName}</span>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="flex items-center gap-2">
+                                            <MapPin className="w-3 h-3 text-slate-300" />
+                                            <span className="text-xs font-bold text-slate-500 truncate max-w-[120px]">{item.centerName}</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className="text-xs font-bold text-slate-700 uppercase bg-slate-100 px-2 py-1 rounded-lg truncate max-w-[150px] block">
-                                            {item.job!.customName || item.job!.type}
+                                            {item.job.customName || item.job.type}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-2">
                                             <Clock className="w-3 h-3 text-slate-300" />
-                                            <span className="text-xs font-bold text-slate-500">{item.job!.startTime} - {endTime}</span>
+                                            <span className="text-xs font-bold text-slate-500">{item.job.startTime} - {endTime}</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        {item.job!.isFinished ? (
+                                        {item.job.isFinished ? (
                                             <span className="inline-flex items-center gap-1 text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100 uppercase">
                                                 <CheckCircle2 className="w-3 h-3" /> Finalizada
                                             </span>
