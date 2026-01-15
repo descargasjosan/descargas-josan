@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+// Importamos el cliente que ya tiene la seguridad configurada
+import { supabase } from '../supabaseClient'; 
 import { Lock, Mail, Loader2, AlertCircle, ArrowRight, UserPlus, LogIn } from 'lucide-react';
 
-// Reutilizamos la configuración de Supabase
-const supabaseUrl = 'https://zblasxlrrjeycwjefitp.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpibGFzeGxycmpleWN3amVmaXRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NjIwMzQsImV4cCI6MjA4MjEzODAzNH0.g0i_tan90kUcAzdEvAsFd5jGciCvd1gdWjZrxdTxIY8';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// BORRAMOS las líneas de supabaseUrl, supabaseKey y el createClient que estaban aquí
 
 const LoginScreen: React.FC = () => {
   const [email, setEmail] = useState('');

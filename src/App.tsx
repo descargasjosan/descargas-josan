@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Sparkles, AlertTriangle, X,
@@ -248,12 +247,9 @@ const App: React.FC = () => {
   
   const [showArchivedWorkers, setShowArchivedWorkers] = useState(false); 
   
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // ESTADO UNIFICADO PARA CONFIRMACIÓN DE BORRADO
+  const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'job' | 'worker' | 'client' | 'task', name: string } | null>(null);
   const [confirmDeleteCourse, setConfirmDeleteCourse] = useState<string | null>(null);
-  
-  // ESTADOS CONFIRMACIÓN SUB-ITEMS CLIENTE
-  const [confirmDeleteCenterId, setConfirmDeleteCenterId] = useState<string | null>(null);
-  const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
 
   // Modales y Estados de UI
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -292,7 +288,6 @@ const App: React.FC = () => {
     setDraggedWorkerId(worker.id);
   };
 
-  // ... (Funciones auxiliares: formatDateDisplay, handleDateChange, etc.) ...
   const formatDateDisplay = (dateStr: string) => {
     try {
       if (!dateStr) return 'Fecha inválida';
@@ -426,7 +421,6 @@ const App: React.FC = () => {
       copyToClipboard(`${title}\n\n${content}`);
   };
 
-  // ... (Export functions: exportDatabaseToExcel, exportBackup, downloadExcelTemplate - se mantienen igual) ...
   const exportDatabaseToExcel = () => {
     const wb = XLSX.utils.book_new();
 
@@ -483,7 +477,6 @@ const App: React.FC = () => {
     showNotification("Base de datos exportada a Excel", "success");
   };
 
-  // RESTAURADA FUNCIÓN DE BACKUP JSON
   const exportBackup = () => {
     const dataStr = JSON.stringify(planning, null, 2);
     const blob = new Blob([dataStr], { type: "application/json" });
@@ -500,7 +493,7 @@ const App: React.FC = () => {
       if (confirmed) {
           const resetState = { 
             ...defaultState,
-            currentDate: new Date().toISOString().split('T')[0] // Ensure we are on today
+            currentDate: new Date().toISOString().split('T')[0] 
           };
           setPlanning(resetState);
           showNotification("Datos de ejemplo cargados y guardados", "success");
@@ -536,7 +529,6 @@ const App: React.FC = () => {
     showNotification("Plantilla Excel descargada", "success");
   };
 
-  // --- CRUD HELPERS ---
   const handleOpenNote = (workerId: string) => {
     const existingNote = planning.dailyNotes?.find(n => n.workerId === workerId && n.date === planning.currentDate);
     
@@ -621,7 +613,6 @@ const App: React.FC = () => {
       packages: '',
       refs: ''
     });
-    setConfirmDeleteId(null);
   };
 
   const saveStandardTask = (task: StandardTask) => {
@@ -642,14 +633,26 @@ const App: React.FC = () => {
     showNotification("Tarea guardada correctamente", "success");
   };
 
-  const deleteStandardTask = (id: string) => {
-    setPlanning(prev => ({
-      ...prev,
-      standardTasks: prev.standardTasks.filter(t => t.id !== id)
-    }));
-    setEditingStandardTask(null);
-    setConfirmDeleteId(null);
-    showNotification("Tarea eliminada", "warning");
+  const executeDelete = () => {
+    if (!itemToDelete) return;
+    const { id, type } = itemToDelete;
+    
+    setPlanning(prev => {
+      const newState = { ...prev };
+      if (type === 'job') newState.jobs = prev.jobs.filter(j => j.id !== id);
+      else if (type === 'worker') newState.workers = prev.workers.filter(w => w.id !== id);
+      else if (type === 'client') newState.clients = prev.clients.filter(c => c.id !== id);
+      else if (type === 'task') newState.standardTasks = prev.standardTasks.filter(t => t.id !== id);
+      return newState;
+    });
+
+    if (type === 'job') setEditingJob(null);
+    else if (type === 'worker') setEditingWorker(null);
+    else if (type === 'client') setEditingClient(null);
+    else if (type === 'task') setEditingStandardTask(null);
+
+    setItemToDelete(null);
+    showNotification("Eliminado correctamente", "warning");
   };
 
   const handleReorderJobs = (sourceJobId: string, targetJobId: string) => {
@@ -710,15 +713,12 @@ const App: React.FC = () => {
           const data = evt.target?.result;
           const workbook = XLSX.read(data, { type: 'binary' });
           
-          // 1. Parse Workers
           const workersSheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('trabajadores') || n.toLowerCase().includes('operarios'));
           let newWorkers: Worker[] = [];
           if (workersSheetName) {
              const worksheet = workbook.Sheets[workersSheetName];
              const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet);
              
-             // FUNCIÓN HELPER PARA ENCONTRAR COLUMNAS CON NOMBRES APROXIMADOS
-             // MODIFICADO: AÑADIDA LÓGICA MÁS ROBUSTA PARA CÓDIGO
              const cleanStr = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
 
              const findColumnValue = (row: any, possibleNames: string[]) => {
@@ -732,8 +732,6 @@ const App: React.FC = () => {
              };
 
              newWorkers = jsonData.map((row: any) => {
-                // Recuperar valores usando múltiples posibles nombres de columna
-                // FIX: Eliminado 'id' para evitar conflictos con 'apellidos'
                 const codeVal = findColumnValue(row, ['cod', 'codigo', 'referencia', 'nº', 'numero']);
                 const nameVal = findColumnValue(row, ['nombre', 'worker', 'empleado', 'apellidos']);
                 const dniVal = findColumnValue(row, ['dni', 'nie', 'nif', 'documento']);
@@ -744,24 +742,20 @@ const App: React.FC = () => {
                 const vehicleVal = findColumnValue(row, ['vehiculo', 'coche']);
                 const coursesVal = findColumnValue(row, ['cursos', 'formacion']);
                 
-                // ARCHIVADO: Lógica mejorada (busca columna "Archivado" o columna "Activo")
                 const archivedCol = findColumnValue(row, ['archivado', 'baja', 'archived']);
                 const activeCol = findColumnValue(row, ['trabaja', 'activo', 'alta']);
                 
                 let isArchived = false;
                 
                 if (archivedCol !== undefined) {
-                    // Si existe columna "Archivado", SI/TRUE/1 significa archivado
                     const val = String(archivedCol).trim().toUpperCase();
                     if (['SI', 'YES', 'TRUE', '1'].includes(val)) isArchived = true;
                 } else if (activeCol !== undefined) {
-                    // Si existe columna "Activo", NO/FALSE/0 significa archivado
                     const val = String(activeCol).trim().toUpperCase();
                     if (['NO', 'FALSE', '0', 'BAJA'].includes(val)) isArchived = true;
                 }
 
-                // LÓGICA CONTRATO ACTUALIZADA
-                let finalContract = ContractType.FIJO_DISCONTINUO; // Default safe
+                let finalContract = ContractType.FIJO_DISCONTINUO; 
                 if (contractVal) {
                     const cStr = String(contractVal).toLowerCase();
                     if (cStr.includes('colaboradora')) {
@@ -834,7 +828,6 @@ const App: React.FC = () => {
       locationDetails: ''
     };
     setEditingJob(newJob);
-    setConfirmDeleteId(null);
   };
 
   const saveJob = (job: Job) => {
@@ -851,13 +844,6 @@ const App: React.FC = () => {
     });
     setEditingJob(null);
     showNotification(job.isCancelled ? "Tarea anulada" : job.isFinished ? "Tarea finalizada" : "Tarea guardada", "success");
-  };
-
-  const deleteJob = (id: string) => {
-    setPlanning(prev => ({ ...prev, jobs: prev.jobs.filter(j => j.id !== id) }));
-    setEditingJob(null);
-    setConfirmDeleteId(null);
-    showNotification("Tarea eliminada", "warning");
   };
 
   const handleOpenDuplicate = (job: Job) => {
@@ -965,7 +951,6 @@ const App: React.FC = () => {
       skills: [],
       isArchived: false
     });
-    setConfirmDeleteId(null);
   };
   
   const saveWorker = (worker: Worker | null) => {
@@ -1036,16 +1021,6 @@ const App: React.FC = () => {
       showNotification("Cliente guardado", "success");
   };
 
-  const deleteClient = (id: string) => {
-      setPlanning(prev => ({
-          ...prev,
-          clients: prev.clients.filter(c => c.id !== id)
-      }));
-      setEditingClient(null);
-      setConfirmDeleteId(null);
-      showNotification("Cliente eliminado", "warning");
-  };
-
   const filteredTasks = useMemo(() => {
       if (!taskSearch) return planning.standardTasks;
       return planning.standardTasks.filter(t => t.name.toLowerCase().includes(taskSearch.toLowerCase()));
@@ -1053,7 +1028,6 @@ const App: React.FC = () => {
 
   const handleAddFuel = () => {
       if (!editingWorker) return;
-      // CORRECCIÓN: Solo validamos el coste
       if (!newFuelRecord.cost) {
           showNotification("El coste es obligatorio", "error");
           return;
@@ -1062,7 +1036,6 @@ const App: React.FC = () => {
           id: `fuel-${Date.now()}`,
           workerId: editingWorker.id,
           date: newFuelRecord.date,
-          // Litros es opcional ahora
           liters: newFuelRecord.liters ? parseFloat(newFuelRecord.liters) : undefined,
           cost: parseFloat(newFuelRecord.cost),
           odometer: newFuelRecord.odometer ? parseFloat(newFuelRecord.odometer) : undefined
@@ -1091,7 +1064,6 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-white overflow-hidden text-slate-900">
       <input type="file" ref={backupInputRef} className="hidden" accept=".json,.xlsx,.xls" onChange={importData} />
       
-      {/* ... (Notifications and Sidebar) ... */}
       {notification && (
         <div className={`fixed top-6 right-6 z-[300] flex items-center gap-4 px-6 py-4 rounded-3xl shadow-2xl border transition-all animate-in fade-in slide-in-from-top-6 ${notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : notification.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-700'}`}>
           <div className="w-8 h-8 rounded-full flex items-center justify-center bg-white shadow-sm">
@@ -1101,6 +1073,26 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* MODAL DE CONFIRMACIÓN DE BORRADO UNIFICADO */}
+      {itemToDelete && (
+        <div className="fixed inset-0 z-[500] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+           <div className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full animate-in zoom-in-95">
+              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mb-6 mx-auto">
+                 <Trash2 className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-black text-slate-900 text-center mb-2 uppercase italic">¿Estás seguro?</h3>
+              <p className="text-sm text-slate-500 text-center mb-8 font-medium leading-relaxed">
+                 Vas a eliminar <strong>{itemToDelete.name}</strong>. Esta acción no se puede deshacer.
+              </p>
+              <div className="flex gap-3">
+                 <button onClick={() => setItemToDelete(null)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-colors">Cancelar</button>
+                 <button onClick={executeDelete} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-700 shadow-lg shadow-red-200 transition-all">Eliminar</button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* Corrected status indicator ternary logic: changed dbStatus comparison with CSS class string to a simple string fallback */}
       <div className={`fixed bottom-4 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all ${dbStatus === 'connected' ? 'bg-green-50 text-green-600 border-green-100' : dbStatus === 'saving' ? 'bg-blue-50 text-blue-600 border-blue-100' : dbStatus === 'loading' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
          {dbStatus === 'connected' && <><Cloud className="w-3 h-3" /> Conectado</>}
          {dbStatus === 'saving' && <><RotateCcw className="w-3 h-3 animate-spin" /> Guardando...</>}
@@ -1136,7 +1128,7 @@ const App: React.FC = () => {
 
          <div className="flex flex-col gap-4 w-full px-3">
             <button onClick={() => setShowBackupModal(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Base de Datos">
-               <DownloadCloud className="w-6 h-6" />
+               <DownloadCloud className="w-4 h-4" />
             </button>
          </div>
       </aside>
@@ -1157,7 +1149,6 @@ const App: React.FC = () => {
                    <div className="flex items-center gap-4">
                       <h1 className="text-2xl font-black text-slate-900 italic uppercase tracking-tighter">Planificación</h1>
                       
-                      {/* TOGGLE VISTA (Diaria / Rango) */}
                       <div className="flex p-1 bg-slate-100 rounded-xl">
                           <button 
                             onClick={() => setViewMode('day')}
@@ -1173,7 +1164,6 @@ const App: React.FC = () => {
                           </button>
                       </div>
 
-                      {/* SELECTORES DE FECHA */}
                       {viewMode === 'day' ? (
                           <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl animate-in fade-in zoom-in-95 duration-200">
                             <button onClick={() => shiftDate(-1)} className="p-2 hover:bg-white rounded-lg shadow-sm transition-all text-slate-500"><ChevronLeft className="w-4 h-4" /></button>
@@ -1238,7 +1228,6 @@ const App: React.FC = () => {
            </>
          )}
 
-         {/* ... (Workers List View) ... */}
          {view === 'workers' && (
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
@@ -1317,7 +1306,6 @@ const App: React.FC = () => {
            </div>
          )}
          
-         {/* ... (Other Views: Clients, DB, Stats - no changes) ... */}
          {view === 'clients' && (
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
@@ -1435,7 +1423,6 @@ const App: React.FC = () => {
 
       </div>
 
-      {/* MODAL DUPLICAR TAREA (Faltaba) */}
       {duplicatingJob && (
           <div className="fixed inset-0 z-[300] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDuplicatingJob(null)}>
              <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -1458,7 +1445,6 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* MODAL NOTA DIARIA (AÑADIDO) */}
       {editingDailyNote && (
         <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setEditingDailyNote(null)}>
            <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
@@ -1470,876 +1456,4 @@ const App: React.FC = () => {
                     <label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Tipo de Nota</label>
                     <div className="flex gap-2">
                        <button onClick={() => setEditingDailyNote({...editingDailyNote, type: 'info'})} className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${editingDailyNote.type === 'info' ? 'bg-blue-100 text-blue-700' : 'bg-slate-50 text-slate-400'}`}>Info</button>
-                       <button onClick={() => setEditingDailyNote({...editingDailyNote, type: 'medical'})} className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${editingDailyNote.type === 'medical' ? 'bg-red-100 text-red-700' : 'bg-slate-50 text-slate-400'}`}>Médica</button>
-                       <button onClick={() => setEditingDailyNote({...editingDailyNote, type: 'time'})} className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${editingDailyNote.type === 'time' ? 'bg-amber-100 text-amber-700' : 'bg-slate-50 text-slate-400'}`}>Horario</button>
-                    </div>
-                 </div>
-                 
-                 <textarea 
-                    className="w-full h-32 bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs font-bold outline-none resize-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Escribe la nota aquí..."
-                    value={editingDailyNote.text}
-                    onChange={e => setEditingDailyNote({...editingDailyNote, text: e.target.value})}
-                 />
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6">
-                 {editingDailyNote.text && (
-                    <button onClick={() => deleteDailyNote(editingDailyNote.id)} className="px-4 py-2 bg-red-50 text-red-500 rounded-xl mr-auto"><Trash2 className="w-4 h-4" /></button>
-                 )}
-                 <button onClick={() => setEditingDailyNote(null)} className="px-6 py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-50">Cancelar</button>
-                 <button onClick={saveDailyNote} className="px-6 py-2 rounded-xl font-bold bg-slate-900 text-white">Guardar</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* SS Report Modal - RESTAURADO Y VERIFICADO */}
-      {showSSReport && (
-        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-6" onClick={() => setShowSSReport(false)}>
-           <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-3xl overflow-hidden animate-in zoom-in-95 p-8" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-6">
-                 <div>
-                    <h2 className="text-2xl font-black text-slate-900 italic uppercase flex items-center gap-3">
-                        <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-500">
-                            <ListTodo className="w-6 h-6" />
-                        </div>
-                        Reporte SS (Fijos Discontinuos)
-                    </h2>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2 ml-14">Comparativa: {formatDateDisplay(ssReport.prevDate)} vs {formatDateDisplay(planning.currentDate)}</p>
-                 </div>
-                 <button onClick={() => setShowSSReport(false)} className="p-3 hover:bg-slate-100 rounded-full transition-colors"><X className="w-6 h-6 text-slate-400" /></button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-8">
-                 {/* ALTAS */}
-                 <div className="bg-emerald-50/50 rounded-3xl p-6 border border-emerald-100 flex flex-col h-full relative group">
-                    <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-sm font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" /> Altas Necesarias
-                        </h3>
-                        <div className="flex items-center gap-2">
-                           {ssReport.altas.length > 0 && (
-                              <button onClick={() => handleCopyList(ssReport.altas, 'altas')} className="p-2 bg-white text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors shadow-sm" title="Copiar Lista">
-                                 <Copy className="w-3 h-3" />
-                              </button>
-                           )}
-                           <span className="bg-white text-emerald-600 px-3 py-1 rounded-lg text-[10px] font-black shadow-sm border border-emerald-100">{ssReport.altas.length}</span>
-                        </div>
-                    </div>
-                    
-                    <div className="flex-1">
-                        {ssReport.altas.length > 0 ? (
-                        <ul className="space-y-3">
-                            {ssReport.altas.map(w => (
-                                <li key={w.id} className="flex items-center justify-between bg-white p-4 rounded-2xl shadow-sm border border-emerald-100/50">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs font-black">{w.code}</div>
-                                        <div>
-                                            <span className="block text-xs font-black text-slate-900">{w.name}</span>
-                                            <span className="block text-[9px] font-bold text-slate-400">{w.dni}</span>
-                                        </div>
-                                    </div>
-                                    <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                                </li>
-                            ))}
-                        </ul>
-                        ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center py-8 opacity-50">
-                            <CheckCircle2 className="w-8 h-8 text-emerald-300 mb-2" />
-                            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">Sin altas para hoy</p>
-                        </div>
-                        )}
-                    </div>
-                 </div>
-
-                 {/* BAJAS */}
-                 <div className="bg-rose-50/50 rounded-3xl p-6 border border-rose-100 flex flex-col h-full relative group">
-                    <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-sm font-black text-rose-800 uppercase tracking-widest flex items-center gap-2">
-                           <div className="w-2 h-2 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50" /> Bajas Necesarias
-                        </h3>
-                        <div className="flex items-center gap-2">
-                           {ssReport.bajas.length > 0 && (
-                              <button onClick={() => handleCopyList(ssReport.bajas, 'bajas')} className="p-2 bg-white text-rose-600 rounded-lg hover:bg-rose-100 transition-colors shadow-sm" title="Copiar Lista">
-                                 <Copy className="w-3 h-3" />
-                              </button>
-                           )}
-                           <span className="bg-white text-rose-600 px-3 py-1 rounded-lg text-[10px] font-black shadow-sm border border-rose-100">{ssReport.bajas.length}</span>
-                        </div>
-                    </div>
-                    
-                    <div className="flex-1">
-                        {ssReport.bajas.length > 0 ? (
-                        <ul className="space-y-3">
-                            {ssReport.bajas.map(w => (
-                                <li key={w.id} className="flex items-center justify-between bg-white p-4 rounded-2xl shadow-sm border border-rose-100/50">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center text-xs font-black">{w.code}</div>
-                                        <div>
-                                            <span className="block text-xs font-black text-slate-900">{w.name}</span>
-                                            <span className="block text-[9px] font-bold text-slate-400">{w.dni}</span>
-                                        </div>
-                                    </div>
-                                    <div className="w-2 h-2 rounded-full bg-rose-400" />
-                                </li>
-                            ))}
-                        </ul>
-                        ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center py-8 opacity-50">
-                            <CheckCircle2 className="w-8 h-8 text-rose-300 mb-2" />
-                            <p className="text-[10px] font-bold text-rose-700 uppercase tracking-widest">Sin bajas para hoy</p>
-                        </div>
-                        )}
-                    </div>
-                 </div>
-              </div>
-           </div>
-        </div>
-      )}
-      
-      {/* Job Modal */}
-      {editingJob && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setEditingJob(null)}>
-           <div className="bg-white w-full max-w-lg rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-black text-slate-900 uppercase italic">
-                      {editingJob.id.startsWith('j-') ? 'Editar Tarea' : 'Nueva Tarea'}
-                  </h2>
-                  <button onClick={() => setEditingJob(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                      <X className="w-5 h-5 text-slate-400" />
-                  </button>
-              </div>
-              
-              <div className="space-y-4">
-                 {/* 1. SELECCIÓN DE CLIENTE */}
-                 <div>
-                     <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Cliente</label>
-                     <select 
-                        className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-100" 
-                        value={editingJob.clientId} 
-                        onChange={e => {
-                            const newClientId = e.target.value;
-                            const client = planning.clients.find(c => c.id === newClientId);
-                            setEditingJob(prev => prev ? ({
-                                ...prev, 
-                                clientId: newClientId,
-                                centerId: client?.centers[0]?.id || '', // Auto-select first center
-                                requiredWorkers: 2, // Reset default
-                                customName: '' // Reset task name
-                            }) : null);
-                        }}
-                     >
-                        <option value="">Seleccionar Cliente</option>
-                        {planning.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                     </select>
-                 </div>
-
-                 {/* 2. SELECCIÓN DE SEDE (Si hay cliente seleccionado) */}
-                 {editingJob.clientId && (
-                     <div>
-                         <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Sede / Centro</label>
-                         <select 
-                            className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-100" 
-                            value={editingJob.centerId} 
-                            onChange={e => setEditingJob({...editingJob, centerId: e.target.value})}
-                         >
-                            {planning.clients.find(c => c.id === editingJob.clientId)?.centers.map(center => (
-                                <option key={center.id} value={center.id}>{center.name} - {center.address}</option>
-                            ))}
-                         </select>
-                     </div>
-                 )}
-
-                 {/* 3. SELECCIÓN DE TAREA (Plantilla + Texto Libre) */}
-                 <div className="grid grid-cols-1 gap-2">
-                     <label className="text-[10px] font-black uppercase text-slate-400 block">Tarea a Realizar</label>
-                     
-                     {/* Selector de Plantilla */}
-                     <select 
-                        className="w-full p-2 bg-slate-50 rounded-xl font-bold text-xs text-slate-500 outline-none border border-transparent hover:border-slate-200 transition-colors"
-                        onChange={(e) => {
-                            const val = e.target.value;
-                            if (!val) return;
-                            
-                            // Buscar en Tareas Cliente
-                            const client = planning.clients.find(c => c.id === editingJob.clientId);
-                            const regularTask = client?.regularTasks?.find(t => t.id === val);
-                            
-                            if (regularTask) {
-                                setEditingJob({
-                                    ...editingJob,
-                                    customName: regularTask.name,
-                                    requiredWorkers: regularTask.defaultWorkers,
-                                    type: regularTask.category
-                                });
-                                return;
-                            }
-
-                            // Buscar en Tareas Estándar Globales
-                            const stdTask = planning.standardTasks.find(t => t.id === val);
-                            if (stdTask) {
-                                setEditingJob({
-                                    ...editingJob,
-                                    customName: stdTask.name,
-                                    requiredWorkers: stdTask.defaultWorkers,
-                                    type: JobType.DESCARGA // Default or inferred
-                                });
-                            }
-                        }}
-                        defaultValue=""
-                     >
-                        <option value="" disabled>-- Cargar Plantilla (Opcional) --</option>
-                        
-                        {/* Tareas del Cliente */}
-                        {planning.clients.find(c => c.id === editingJob.clientId)?.regularTasks?.length ? (
-                            <optgroup label="Tareas Habituales Cliente">
-                                {planning.clients.find(c => c.id === editingJob.clientId)?.regularTasks.map(t => (
-                                    <option key={t.id} value={t.id}>{t.name} ({t.defaultWorkers} ops)</option>
-                                ))}
-                            </optgroup>
-                        ) : null}
-
-                        {/* Tareas Estándar */}
-                        <optgroup label="Tareas Estándar">
-                            {planning.standardTasks.map(t => (
-                                <option key={t.id} value={t.id}>{t.name} ({t.defaultWorkers} ops)</option>
-                            ))}
-                        </optgroup>
-                     </select>
-
-                     {/* Input Texto Libre */}
-                     <input 
-                        type="text" 
-                        placeholder="Nombre de la tarea o referencia..." 
-                        className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-100" 
-                        value={editingJob.customName || ''} 
-                        onChange={e => setEditingJob({...editingJob, customName: e.target.value})} 
-                     />
-                 </div>
-
-                 {/* 4. HORARIO Y OPERARIOS */}
-                 <div className="flex gap-4">
-                    <div className="flex-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Horario Previsto</label>
-                        <div className="flex gap-2">
-                            <input type="time" className="flex-1 p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={editingJob.startTime} onChange={e => setEditingJob({...editingJob, startTime: e.target.value})} />
-                            <input type="time" className="flex-1 p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={editingJob.endTime} onChange={e => setEditingJob({...editingJob, endTime: e.target.value})} />
-                        </div>
-                    </div>
-                    <div className="w-24">
-                        <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Operarios</label>
-                        <input type="number" min="1" className="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none text-center" value={editingJob.requiredWorkers} onChange={e => setEditingJob({...editingJob, requiredWorkers: parseInt(e.target.value) || 1})} />
-                    </div>
-                 </div>
-
-                 {/* 5. ESTADOS Y ACCIONES (Finalizar / Anular) */}
-                 <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
-                     {/* Finalizar Manualmente */}
-                     <div className={`p-3 rounded-xl border transition-all ${editingJob.isFinished ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100'}`}>
-                        <label className="flex items-center gap-2 cursor-pointer mb-2">
-                            <input 
-                                type="checkbox" 
-                                className="w-4 h-4 text-blue-600 rounded" 
-                                checked={editingJob.isFinished || false} 
-                                onChange={e => setEditingJob({
-                                    ...editingJob, 
-                                    isFinished: e.target.checked, 
-                                    isCancelled: false, // Mutually exclusive usually
-                                    actualEndTime: e.target.checked ? (editingJob.actualEndTime || editingJob.endTime) : undefined 
-                                })} 
-                            />
-                            <span className={`text-xs font-black uppercase ${editingJob.isFinished ? 'text-blue-700' : 'text-slate-500'}`}>Finalizada</span>
-                        </label>
-                        {editingJob.isFinished && (
-                            <div className="animate-in fade-in slide-in-from-top-1">
-                                <label className="text-[9px] font-bold text-blue-400 uppercase block mb-1">Hora Real Fin</label>
-                                <input 
-                                    type="time" 
-                                    className="w-full p-1.5 bg-white rounded-lg font-bold text-xs text-blue-900 outline-none border border-blue-100" 
-                                    value={editingJob.actualEndTime || ''} 
-                                    onChange={e => setEditingJob({...editingJob, actualEndTime: e.target.value})} 
-                                />
-                            </div>
-                        )}
-                     </div>
-
-                     {/* Anular */}
-                     <div className={`p-3 rounded-xl border transition-all ${editingJob.isCancelled ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-100'}`}>
-                        <label className="flex items-center gap-2 cursor-pointer mb-2">
-                            <input 
-                                type="checkbox" 
-                                className="w-4 h-4 text-red-600 rounded" 
-                                checked={editingJob.isCancelled || false} 
-                                onChange={e => setEditingJob({
-                                    ...editingJob, 
-                                    isCancelled: e.target.checked, 
-                                    isFinished: false, // Mutually exclusive
-                                    cancellationReason: e.target.checked ? (editingJob.cancellationReason || '') : undefined
-                                })} 
-                            />
-                            <span className={`text-xs font-black uppercase ${editingJob.isCancelled ? 'text-red-700' : 'text-slate-500'}`}>Anular Tarea</span>
-                        </label>
-                        {editingJob.isCancelled && (
-                            <div className="animate-in fade-in slide-in-from-top-1">
-                                <input 
-                                    type="text" 
-                                    placeholder="Motivo anulación..." 
-                                    className="w-full p-1.5 bg-white rounded-lg font-bold text-xs text-red-900 outline-none border border-red-100 placeholder:text-red-300" 
-                                    value={editingJob.cancellationReason || ''} 
-                                    onChange={e => setEditingJob({...editingJob, cancellationReason: e.target.value})} 
-                                />
-                            </div>
-                        )}
-                     </div>
-                 </div>
-                 
-                 {/* Albarán / Referencia Extra */}
-                 <div className="grid grid-cols-2 gap-4">
-                    <input type="text" placeholder="Nº Albarán (Opcional)" className="p-3 bg-slate-50 rounded-xl font-bold text-xs outline-none" value={editingJob.deliveryNote || ''} onChange={e => setEditingJob({...editingJob, deliveryNote: e.target.value})} />
-                    <input type="text" placeholder="Ref. Interna (Opcional)" className="p-3 bg-slate-50 rounded-xl font-bold text-xs outline-none" value={editingJob.ref || ''} onChange={e => setEditingJob({...editingJob, ref: e.target.value})} />
-                 </div>
-
-              </div>
-
-              <div className="flex justify-end gap-3 mt-8">
-                 {editingJob.id.startsWith('j-') && (
-                    <button 
-                        onClick={() => {
-                            if(window.confirm('¿Eliminar tarea definitivamente?')) deleteJob(editingJob.id);
-                        }} 
-                        className="px-4 py-3 bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 rounded-xl mr-auto transition-colors"
-                        title="Eliminar"
-                    >
-                        <Trash2 className="w-5 h-5" />
-                    </button>
-                 )}
-                 <button onClick={() => setEditingJob(null)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50 transition-colors">Cancelar</button>
-                 <button onClick={() => saveJob(editingJob)} className="px-8 py-3 rounded-xl font-bold bg-slate-900 text-white shadow-lg hover:bg-slate-800 transition-all transform hover:scale-[1.02] active:scale-95">Guardar</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* NUEVO: Modal de Edición de Cliente AVANZADO */}
-      {editingClient && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setEditingClient(null)}>
-           <div className="bg-white w-full max-w-4xl rounded-[32px] p-8 shadow-2xl max-h-[90vh] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-6">
-                 <h2 className="text-xl font-black text-slate-900 uppercase italic">Ficha de Cliente</h2>
-                 <button onClick={() => setEditingClient(null)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-400" /></button>
-              </div>
-              
-              <div className="flex-1 space-y-8 overflow-y-auto custom-scrollbar pr-2">
-                 
-                 {/* 1. Identidad */}
-                 <section className="space-y-4">
-                    <div className="flex items-start gap-6">
-                       <div className="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center border-2 border-dashed border-slate-300">
-                          <input 
-                             type="text" 
-                             maxLength={3} 
-                             className="w-full h-full bg-transparent text-center text-xl font-black uppercase placeholder:text-slate-300 outline-none"
-                             placeholder="IMG" 
-                             value={editingClient.logo} 
-                             onChange={e => setEditingClient({...editingClient, logo: e.target.value.toUpperCase()})}
-                          />
-                       </div>
-                       <div className="flex-1 grid grid-cols-2 gap-4">
-                          <div className="space-y-1">
-                             <label className="text-[10px] font-black uppercase text-slate-400">Nombre Fiscal</label>
-                             <input type="text" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingClient.name} onChange={e => setEditingClient({...editingClient, name: e.target.value})} />
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[10px] font-black uppercase text-slate-400">CIF / NIF</label>
-                             <input type="text" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingClient.cif} onChange={e => setEditingClient({...editingClient, cif: e.target.value})} />
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[10px] font-black uppercase text-slate-400">Prioridad (1 Alta - 3 Baja)</label>
-                             <select className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={editingClient.priority} onChange={e => setEditingClient({...editingClient, priority: parseInt(e.target.value)})}>
-                                <option value={1}>1 - Crítica</option>
-                                <option value={2}>2 - Normal</option>
-                                <option value={3}>3 - Baja</option>
-                             </select>
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[10px] font-black uppercase text-slate-400">Ubicación General</label>
-                             <input type="text" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingClient.location} onChange={e => setEditingClient({...editingClient, location: e.target.value})} />
-                          </div>
-                       </div>
-                    </div>
-                 </section>
-
-                 <hr className="border-slate-100" />
-
-                 {/* 2. Contacto */}
-                 <section>
-                    <h3 className="text-sm font-black uppercase text-slate-400 mb-4 flex items-center gap-2"><Users className="w-4 h-4" /> Datos de Contacto</h3>
-                    <div className="grid grid-cols-3 gap-4">
-                       <input type="text" placeholder="Persona Contacto" className="p-3 bg-slate-50 rounded-xl font-bold text-xs" value={editingClient.contactPerson} onChange={e => setEditingClient({...editingClient, contactPerson: e.target.value})} />
-                       <input type="text" placeholder="Teléfono" className="p-3 bg-slate-50 rounded-xl font-bold text-xs" value={editingClient.phone} onChange={e => setEditingClient({...editingClient, phone: e.target.value})} />
-                       <input type="email" placeholder="Email" className="p-3 bg-slate-50 rounded-xl font-bold text-xs" value={editingClient.email} onChange={e => setEditingClient({...editingClient, email: e.target.value})} />
-                    </div>
-                 </section>
-
-                 {/* 3. Sedes */}
-                 <section className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                    <div className="flex justify-between items-center mb-4">
-                       <h3 className="text-sm font-black uppercase text-slate-600 flex items-center gap-2"><MapPin className="w-4 h-4" /> Sedes y Centros</h3>
-                       <button onClick={() => setEditingClient({...editingClient, centers: [...editingClient.centers, { id: `ct-${Date.now()}`, name: '', address: '', publicTransport: false }]})} className="text-blue-600 text-[10px] font-black uppercase hover:underline">+ Añadir Sede</button>
-                    </div>
-                    <div className="space-y-3">
-                       {editingClient.centers.map((center, idx) => (
-                          <div key={idx} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-12 gap-3 items-center group">
-                             <div className="col-span-3">
-                                <input type="text" placeholder="Nombre Sede" className="w-full text-xs font-bold outline-none placeholder:text-slate-300" value={center.name} onChange={(e) => {
-                                   const newCenters = [...editingClient.centers];
-                                   newCenters[idx].name = e.target.value;
-                                   setEditingClient({...editingClient, centers: newCenters});
-                                }} />
-                             </div>
-                             <div className="col-span-6 border-l border-slate-100 pl-3">
-                                <input type="text" placeholder="Dirección Completa" className="w-full text-xs text-slate-500 outline-none placeholder:text-slate-300" value={center.address} onChange={(e) => {
-                                   const newCenters = [...editingClient.centers];
-                                   newCenters[idx].address = e.target.value;
-                                   setEditingClient({...editingClient, centers: newCenters});
-                                }} />
-                             </div>
-                             <div className="col-span-2 flex justify-center">
-                                <button 
-                                   onClick={() => {
-                                      const newCenters = [...editingClient.centers];
-                                      newCenters[idx].publicTransport = !newCenters[idx].publicTransport;
-                                      setEditingClient({...editingClient, centers: newCenters});
-                                   }}
-                                   className={`p-1.5 rounded-lg transition-colors ${center.publicTransport ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-300 hover:bg-slate-200'}`}
-                                   title="Tiene Transporte Público"
-                                >
-                                   <Bus className="w-4 h-4" />
-                                </button>
-                             </div>
-                             <div className="col-span-1 flex justify-end">
-                                <button onClick={() => {
-                                   const newCenters = editingClient.centers.filter((_, i) => i !== idx);
-                                   setEditingClient({...editingClient, centers: newCenters});
-                                }} className="text-slate-300 hover:text-red-500 transition-colors"><X className="w-4 h-4" /></button>
-                             </div>
-                          </div>
-                       ))}
-                       {editingClient.centers.length === 0 && <p className="text-center text-xs text-slate-400 italic py-4">No hay sedes registradas</p>}
-                    </div>
-                 </section>
-
-                 {/* 4. Tareas Habituales */}
-                 <section className="bg-blue-50/50 p-6 rounded-3xl border border-blue-100">
-                    <div className="flex justify-between items-center mb-4">
-                       <h3 className="text-sm font-black uppercase text-blue-800 flex items-center gap-2"><Briefcase className="w-4 h-4" /> Tareas Habituales</h3>
-                       <button onClick={() => setEditingClient({...editingClient, regularTasks: [...(editingClient.regularTasks || []), { id: `rt-${Date.now()}`, name: '', defaultWorkers: 2, category: JobType.DESCARGA }]})} className="text-blue-600 text-[10px] font-black uppercase hover:underline">+ Añadir Tarea</button>
-                    </div>
-                    <div className="space-y-3">
-                       {(editingClient.regularTasks || []).map((task, idx) => (
-                          <div key={idx} className="bg-white p-3 rounded-2xl border border-blue-100 shadow-sm grid grid-cols-12 gap-3 items-center">
-                             <div className="col-span-5">
-                                <input type="text" placeholder="Nombre Tarea" className="w-full text-xs font-bold outline-none" value={task.name} onChange={(e) => {
-                                   const newTasks = [...(editingClient.regularTasks || [])];
-                                   newTasks[idx].name = e.target.value;
-                                   setEditingClient({...editingClient, regularTasks: newTasks});
-                                }} />
-                             </div>
-                             <div className="col-span-4">
-                                <select className="w-full text-[10px] font-bold uppercase bg-transparent outline-none" value={task.category} onChange={(e) => {
-                                   const newTasks = [...(editingClient.regularTasks || [])];
-                                   newTasks[idx].category = e.target.value as JobType;
-                                   setEditingClient({...editingClient, regularTasks: newTasks});
-                                }}>
-                                   {Object.values(JobType).map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
-                             </div>
-                             <div className="col-span-2 flex items-center gap-2">
-                                <Users className="w-3 h-3 text-slate-400" />
-                                <input type="number" className="w-12 text-xs font-bold bg-slate-50 rounded p-1 text-center" value={task.defaultWorkers} onChange={(e) => {
-                                   const newTasks = [...(editingClient.regularTasks || [])];
-                                   newTasks[idx].defaultWorkers = parseInt(e.target.value);
-                                   setEditingClient({...editingClient, regularTasks: newTasks});
-                                }} />
-                             </div>
-                             <div className="col-span-1 flex justify-end">
-                                <button onClick={() => {
-                                   const newTasks = (editingClient.regularTasks || []).filter((_, i) => i !== idx);
-                                   setEditingClient({...editingClient, regularTasks: newTasks});
-                                }} className="text-slate-300 hover:text-red-500"><X className="w-4 h-4" /></button>
-                             </div>
-                          </div>
-                       ))}
-                    </div>
-                 </section>
-
-                 <div className="grid grid-cols-2 gap-8">
-                    {/* 5. Formación Exigida */}
-                    <section>
-                       <h3 className="text-sm font-black uppercase text-slate-400 mb-4 flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Formación Exigida</h3>
-                       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 h-48 overflow-y-auto custom-scrollbar">
-                          {planning.availableCourses.map(course => (
-                             <label key={course} className="flex items-center gap-2 mb-2 cursor-pointer hover:bg-white p-2 rounded-lg transition-colors">
-                                <input 
-                                   type="checkbox" 
-                                   className="w-4 h-4 text-slate-900 rounded"
-                                   checked={(editingClient.requiredCourses || []).includes(course)}
-                                   onChange={(e) => {
-                                      const current = editingClient.requiredCourses || [];
-                                      let updated;
-                                      if (e.target.checked) updated = [...current, course];
-                                      else updated = current.filter(c => c !== course);
-                                      setEditingClient({...editingClient, requiredCourses: updated});
-                                   }}
-                                />
-                                <span className="text-xs font-bold text-slate-600">{course}</span>
-                             </label>
-                          ))}
-                       </div>
-                    </section>
-
-                    {/* 6. Configuración */}
-                    <section>
-                       <h3 className="text-sm font-black uppercase text-slate-400 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Configuración</h3>
-                       <div className="space-y-3">
-                          <label className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100 cursor-pointer">
-                             <span className="text-xs font-bold text-slate-700">Permitir Tareas Texto Libre</span>
-                             <div className={`w-10 h-6 rounded-full p-1 transition-colors ${editingClient.allowFreeTextTask ? 'bg-green-500' : 'bg-slate-200'}`}>
-                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${editingClient.allowFreeTextTask ? 'translate-x-4' : ''}`} />
-                             </div>
-                             <input type="checkbox" className="hidden" checked={editingClient.allowFreeTextTask} onChange={e => setEditingClient({...editingClient, allowFreeTextTask: e.target.checked})} />
-                          </label>
-                       </div>
-                    </section>
-                 </div>
-
-              </div>
-
-              {/* Footer Buttons */}
-              <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-slate-100">
-                 {editingClient.id.startsWith('c-') && <button onClick={() => deleteClient(editingClient.id)} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl mr-auto hover:bg-red-100 transition-colors"><Trash2 className="w-5 h-5" /></button>}
-                 <button onClick={() => setEditingClient(null)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50 transition-colors">Cancelar</button>
-                 <button onClick={() => saveClient(editingClient)} className="px-6 py-3 rounded-xl font-bold bg-slate-900 text-white hover:shadow-lg transition-all">Guardar Ficha</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* NUEVO: Modal de Tarea Estándar (FALTABA) */}
-      {editingStandardTask && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setEditingStandardTask(null)}>
-            <div className="bg-white p-8 rounded-[32px] shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
-                <h2 className="text-xl font-black text-slate-900 mb-6 uppercase italic">Editar Tarea Estándar</h2>
-                <div className="space-y-4">
-                    <input type="text" placeholder="Nombre Tarea" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingStandardTask.name} onChange={e => setEditingStandardTask({...editingStandardTask, name: e.target.value})} />
-                    <input type="number" placeholder="Operarios por defecto" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingStandardTask.defaultWorkers} onChange={e => setEditingStandardTask({...editingStandardTask, defaultWorkers: parseInt(e.target.value)})} />
-                    <input type="text" placeholder="Paquetería (ej: 300-500)" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingStandardTask.packages} onChange={e => setEditingStandardTask({...editingStandardTask, packages: e.target.value})} />
-                    <input type="text" placeholder="Referencias (ej: General, SKU-A)" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingStandardTask.refs} onChange={e => setEditingStandardTask({...editingStandardTask, refs: e.target.value})} />
-                </div>
-                <div className="flex justify-end gap-3 mt-6">
-                    {editingStandardTask.id.startsWith('st-') && <button onClick={() => deleteStandardTask(editingStandardTask.id)} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl mr-auto"><Trash2 className="w-5 h-5" /></button>}
-                    <button onClick={() => setEditingStandardTask(null)} className="px-6 py-3 rounded-xl font-bold text-slate-500">Cancelar</button>
-                    <button onClick={() => saveStandardTask(editingStandardTask)} className="px-6 py-3 rounded-xl font-bold bg-slate-900 text-white">Guardar</button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* Worker Modal - ADVANCED with Fuel & Notes */}
-      {editingWorker && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setEditingWorker(null)}>
-           <div className="bg-white w-full max-w-2xl rounded-[32px] p-8 shadow-2xl max-h-[90vh] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex justify-between items-center mb-6">
-                 <h2 className="text-xl font-black text-slate-900 uppercase italic">Editar Operario</h2>
-                 <button onClick={() => setEditingWorker(null)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-400" /></button>
-              </div>
-              
-              <div className="flex-1 space-y-8 overflow-y-auto custom-scrollbar pr-2">
-                 {/* Datos Básicos */}
-                 <section className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <input type="text" placeholder="Nombre" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingWorker.name} onChange={e => setEditingWorker({...editingWorker, name: e.target.value})} />
-                        <input type="text" placeholder="Código" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingWorker.code} onChange={e => setEditingWorker({...editingWorker, code: e.target.value})} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <input type="text" placeholder="DNI" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingWorker.dni} onChange={e => setEditingWorker({...editingWorker, dni: e.target.value})} />
-                        <input type="text" placeholder="Teléfono" className="w-full p-3 bg-slate-50 rounded-xl font-bold" value={editingWorker.phone} onChange={e => setEditingWorker({...editingWorker, phone: e.target.value})} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <select className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={editingWorker.role} onChange={e => setEditingWorker({...editingWorker, role: e.target.value})}>
-                            {WORKER_ROLES.map(role => (
-                                <option key={role} value={role}>{role}</option>
-                            ))}
-                        </select>
-                        {/* SELECTOR DE CONTRATO ACTUALIZADO */}
-                        <select className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none" value={editingWorker.contractType} onChange={e => setEditingWorker({...editingWorker, contractType: e.target.value as ContractType})}>
-                            <option value={ContractType.INDEFINIDO}>Indefinido</option>
-                            <option value={ContractType.FIJO_DISCONTINUO}>Fijo Discontinuo</option>
-                            <option value={ContractType.AUTONOMO}>Autónomo</option>
-                            <option value={ContractType.AUTONOMA_COLABORADORA}>Autónoma Colaboradora</option>
-                        </select>
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-xl">
-                            <input type="checkbox" className="w-4 h-4 text-blue-600 rounded" checked={editingWorker.hasVehicle} onChange={e => setEditingWorker({...editingWorker, hasVehicle: e.target.checked})} />
-                            <span className="text-xs font-black uppercase text-slate-600">Vehículo Propio</span>
-                        </label>
-                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-xl">
-                            <input type="checkbox" className="w-4 h-4 text-slate-400 rounded" checked={editingWorker.isArchived || false} onChange={e => setEditingWorker({...editingWorker, isArchived: e.target.checked})} />
-                            <span className="text-xs font-black uppercase text-slate-400">Archivado</span>
-                        </label>
-                    </div>
-                 </section>
-
-                 {/* ... (Resto del modal sin cambios) ... */}
-                 
-                 {/* Formación y Cursos */}
-                 <section className="bg-blue-50/50 p-6 rounded-3xl border border-blue-100">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 bg-blue-100 text-blue-600 rounded-xl"><GraduationCap className="w-4 h-4" /></div>
-                        <h3 className="text-sm font-black uppercase text-blue-800 tracking-widest">Formación y Cursos</h3>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        {planning.availableCourses.map(course => (
-                            <label key={course} className="flex items-center gap-2 cursor-pointer bg-white p-3 rounded-xl border border-blue-100 hover:border-blue-300 transition-all">
-                                <input 
-                                    type="checkbox" 
-                                    className="w-4 h-4 text-blue-600 rounded border-slate-300"
-                                    checked={editingWorker.completedCourses?.includes(course) || false}
-                                    onChange={(e) => {
-                                        const current = editingWorker.completedCourses || [];
-                                        let updated;
-                                        if (e.target.checked) {
-                                            updated = [...current, course];
-                                        } else {
-                                            updated = current.filter(c => c !== course);
-                                        }
-                                        setEditingWorker({...editingWorker, completedCourses: updated});
-                                    }}
-                                />
-                                <span className="text-[10px] font-bold text-slate-700 uppercase">{course}</span>
-                            </label>
-                        ))}
-                    </div>
-                 </section>
-
-                 {/* Control de Gasolina (NUEVO) */}
-                 {planning.workers.some(w => w.id === editingWorker.id) && (
-                    <section className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="p-2 bg-amber-100 text-amber-600 rounded-xl"><Fuel className="w-4 h-4" /></div>
-                            <h3 className="text-sm font-black uppercase text-amber-800 tracking-widest">Control Combustible</h3>
-                        </div>
-                        
-                        <div className="bg-white p-4 rounded-2xl border border-amber-100 mb-4">
-                            <div className="grid grid-cols-3 gap-3 mb-3">
-                                <input type="date" className="bg-slate-50 rounded-lg px-2 py-1.5 text-xs font-bold" value={newFuelRecord.date} onChange={e => setNewFuelRecord({...newFuelRecord, date: e.target.value})} />
-                                <input type="number" step="0.01" placeholder="Litros (Opcional)" className="bg-slate-50 rounded-lg px-2 py-1.5 text-xs font-bold" value={newFuelRecord.liters} onChange={e => setNewFuelRecord({...newFuelRecord, liters: e.target.value})} />
-                                <input type="number" step="0.01" placeholder="€ Coste" className="bg-slate-50 rounded-lg px-2 py-1.5 text-xs font-bold" value={newFuelRecord.cost} onChange={e => setNewFuelRecord({...newFuelRecord, cost: e.target.value})} />
-                            </div>
-                            <button onClick={handleAddFuel} className="w-full bg-amber-500 text-white py-2 rounded-xl text-[10px] font-black uppercase hover:bg-amber-600">Registrar Repostaje</button>
-                        </div>
-
-                        <div className="max-h-[150px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                             {planning.fuelRecords?.filter(fr => fr.workerId === editingWorker.id).map(fr => (
-                                 <div key={fr.id} className="flex justify-between items-center p-2 bg-white rounded-xl border border-slate-100 text-xs">
-                                     <span className="font-bold text-slate-500">{formatDateDMY(fr.date)}</span>
-                                     <span className="font-black text-slate-800">
-                                         {fr.liters ? `${fr.liters}L - ` : ''}{fr.cost}€
-                                     </span>
-                                     <button onClick={() => handleDeleteFuel(fr.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
-                                 </div>
-                             ))}
-                             {(planning.fuelRecords?.filter(fr => fr.workerId === editingWorker.id).length || 0) === 0 && (
-                                 <p className="text-center text-[10px] text-slate-400 italic">Sin registros</p>
-                             )}
-                        </div>
-                    </section>
-                 )}
-
-                 {/* Historial Notas */}
-                 <section className="border-t border-slate-100 pt-6">
-                    <h3 className="text-xs font-black uppercase text-slate-400 mb-4 flex items-center gap-2"><StickyNote className="w-4 h-4" /> Notas y Observaciones</h3>
-                     <div className="space-y-3 max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
-                         {planning.dailyNotes?.filter(n => n.workerId === editingWorker.id).map(note => (
-                             <div key={note.id} className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
-                                 <div className="flex justify-between mb-1">
-                                     <span className="font-black text-slate-400 uppercase text-[9px]">{formatDateDMY(note.date)}</span>
-                                     {note.type === 'medical' && <Stethoscope className="w-3 h-3 text-red-500" />}
-                                 </div>
-                                 <p className="font-bold text-slate-700">{note.text}</p>
-                             </div>
-                         ))}
-                     </div>
-                 </section>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-slate-100">
-                 {planning.workers.some(w => w.id === editingWorker.id) && (
-                    <button onClick={() => setConfirmDeleteId(editingWorker.id)} className="px-4 py-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors mr-auto"><Trash2 className="w-5 h-5" /></button>
-                 )}
-                 <button onClick={() => setEditingWorker(null)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50">Cancelar</button>
-                 <button onClick={() => saveWorker(editingWorker)} className="px-6 py-3 rounded-xl font-bold bg-slate-900 text-white shadow-lg">Guardar</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* MODAL BACKUP (IMPORT) - Asegurado z-index y visibilidad */}
-      {showBackupModal && (
-         <div className="fixed inset-0 z-[300] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowBackupModal(false)}>
-            <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-               <h3 className="text-lg font-black text-slate-900 italic uppercase mb-4">Base de Datos</h3>
-               <div className="space-y-3">
-                  <button onClick={exportBackup} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-blue-50 hover:text-blue-600 flex items-center justify-center gap-2"><DownloadCloud className="w-4 h-4" /> Exportar Backup JSON</button>
-                  <button onClick={exportDatabaseToExcel} className="w-full py-4 bg-green-50 rounded-2xl font-black text-xs uppercase tracking-widest text-green-600 hover:bg-green-100 flex items-center justify-center gap-2"><FileSpreadsheet className="w-4 h-4" /> Exportar Todo a Excel</button>
-                  <button onClick={() => backupInputRef.current?.click()} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-blue-50 hover:text-blue-600 flex items-center justify-center gap-2"><Upload className="w-4 h-4" /> Importar Excel / JSON</button>
-                  <button onClick={downloadExcelTemplate} className="w-full py-4 bg-purple-50 rounded-2xl font-black text-xs uppercase tracking-widest text-purple-600 hover:bg-purple-100 flex items-center justify-center gap-2"><Table className="w-4 h-4" /> Descargar Plantilla</button>
-               </div>
-            </div>
-         </div>
-      )}
-
-      {/* CORRECCIÓN: AÑADIR MODAL DE CALENDARIO */}
-      {showCalendarSelector && (
-        <CalendarSelector 
-          currentDate={planning.currentDate}
-          customHolidays={planning.customHolidays}
-          onSelect={handleDateChange}
-          onClose={() => setShowCalendarSelector(false)}
-          onGoToToday={goToToday}
-          jobs={planning.jobs}
-        />
-      )}
-
-      {/* CORRECCIÓN: AÑADIR MODAL DE NOTIFICACIONES WHATSAPP */}
-      {showNotificationsModal && (
-        <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setShowNotificationsModal(false)}>
-           <div className="bg-white w-full max-w-4xl h-[80vh] rounded-[32px] shadow-2xl flex overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-              
-              {(() => {
-                  const dailyJobs = planning.jobs.filter(j => j.date === planning.currentDate && !j.isCancelled);
-                  const notifiedList = planning.notifications[planning.currentDate] || [];
-                  const workerIds = Array.from(new Set(dailyJobs.flatMap(j => j.assignedWorkerIds)));
-                  const pendingCount = workerIds.filter(wid => !notifiedList.includes(wid)).length;
-                  
-                  return (
-                    <>
-                      <div className="w-1/3 bg-slate-50 border-r border-slate-100 flex flex-col">
-                         <div className="p-6 border-b border-slate-100">
-                            <h2 className="text-lg font-black text-slate-900 italic uppercase">Central Avisos</h2>
-                            <div className="flex justify-between items-end mt-1">
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{formatDateDisplay(planning.currentDate)}</p>
-                                <span className={`text-[10px] font-black px-2 py-1 rounded-lg border ${pendingCount > 0 ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
-                                    {pendingCount} Pendientes
-                                </span>
-                            </div>
-                         </div>
-                         <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-                            {workerIds.length === 0 ? <p className="text-center text-xs text-slate-400 py-4">No hay operarios asignados hoy</p> : 
-                                workerIds.map(wid => {
-                                  const worker = planning.workers.find(w => w.id === wid);
-                                  if (!worker) return null;
-                                  const isNotified = notifiedList.includes(wid);
-                                  const isSelected = selectedNotifyWorkerId === wid;
-                                  return (
-                                     <button 
-                                        key={wid}
-                                        onClick={() => {
-                                           setSelectedNotifyWorkerId(wid);
-                                           const jobs = dailyJobs.filter(j => j.assignedWorkerIds.includes(wid));
-                                           if (jobs.length > 0) {
-                                              const job = jobs[0];
-                                              const client = planning.clients.find(c => c.id === job.clientId);
-                                              const center = client?.centers.find(ct => ct.id === job.centerId);
-                                              if (client) {
-                                                 setWhatsappPreviewText(generateWhatsAppMessage(worker, job, center, client));
-                                              }
-                                           }
-                                        }}
-                                        className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between group ${isSelected ? 'bg-white border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:border-blue-300'}`}
-                                     >
-                                        <div className="flex items-center gap-3">
-                                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[10px] ${isNotified ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>
-                                              {worker.code}
-                                           </div>
-                                           <div>
-                                              <p className="text-xs font-black text-slate-900 truncate max-w-[100px]">{worker.name.split(' ')[0]}</p>
-                                              <p className="text-[9px] font-bold text-slate-400 uppercase">{isNotified ? 'Notificado' : 'Pendiente'}</p>
-                                           </div>
-                                        </div>
-                                        {isNotified && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                                     </button>
-                                  );
-                                })
-                            }
-                         </div>
-                      </div>
-
-                      <div className="flex-1 flex flex-col bg-white">
-                         <div className="flex-1 p-8 flex flex-col">
-                            {selectedNotifyWorkerId ? (
-                               <>
-                                  <h3 className="text-sm font-black uppercase text-slate-400 mb-4 flex items-center gap-2">
-                                     <MessageCircle className="w-4 h-4" /> Vista Previa Mensaje
-                                  </h3>
-                                  <textarea 
-                                     className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-2xl p-6 text-sm font-medium text-slate-700 leading-relaxed focus:outline-none focus:ring-4 focus:ring-blue-50 resize-none mb-6"
-                                     value={whatsappPreviewText}
-                                     onChange={(e) => setWhatsappPreviewText(e.target.value)}
-                                  />
-                                  <div className="flex justify-end gap-4">
-                                     {(() => {
-                                         const isSelectedNotified = notifiedList.includes(selectedNotifyWorkerId);
-                                         return (
-                                             <button 
-                                                onClick={() => {
-                                                   toggleNotificationStatus(selectedNotifyWorkerId, planning.currentDate, !isSelectedNotified);
-                                                }}
-                                                className={`px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-3 ${isSelectedNotified ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
-                                             >
-                                                {isSelectedNotified ? <RotateCcw className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-                                                {isSelectedNotified ? 'Desmarcar' : 'Marcar Manual'}
-                                             </button>
-                                         );
-                                     })()}
-                                     
-                                     <button 
-                                        onClick={() => {
-                                           const worker = planning.workers.find(w => w.id === selectedNotifyWorkerId);
-                                           if (worker) {
-                                              openWhatsApp(worker, whatsappPreviewText);
-                                              toggleNotificationStatus(worker.id, planning.currentDate, true);
-                                           }
-                                        }}
-                                        className="bg-[#25D366] hover:bg-[#128C7E] text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-green-100 hover:shadow-2xl hover:-translate-y-1 transition-all flex items-center gap-3"
-                                     >
-                                        <Send className="w-4 h-4" /> Enviar WhatsApp
-                                     </button>
-                                  </div>
-                               </>
-                            ) : (
-                               <div className="h-full flex flex-col items-center justify-center text-slate-300 opacity-50">
-                                  <MessageCircle className="w-16 h-16 mb-4" />
-                                  <p className="text-xs font-black uppercase tracking-widest">Selecciona un operario</p>
-                               </div>
-                            )}
-                         </div>
-                         <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
-                            <button onClick={() => setShowNotificationsModal(false)} className="px-6 py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-200 transition-colors">Cerrar</button>
-                         </div>
-                      </div>
-                    </>
-                  );
-              })()}
-
-           </div>
-        </div>
-      )}
-
-    </div>
-  );
-};
-
-export default App;
+                       <button onClick={() => setEditingDailyNote({...editingDailyNote, type: 'medical'})} className={`flex-1 py-2 rounded-xl text-xs
