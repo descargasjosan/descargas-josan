@@ -1,12 +1,113 @@
-import React, { useState, useMemo } from 'react';
-import { CalendarDays, Search, Download, Table, ArrowRight, Clock } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { CalendarDays, Search, Download, Table, ArrowRight, Clock, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PlanningState, Worker, ContractType, Job } from '../types';
-import { formatDateDMY } from '../utils';
+import { PlanningState, Worker, ContractType, Job, Holiday } from '../types';
+import { formatDateDMY, isHoliday } from '../utils';
 
 interface CompactPlanningViewProps {
   planning: PlanningState;
 }
+
+interface CalendarSelectorProps {
+  currentDate: string;
+  customHolidays: Holiday[];
+  onSelect: (date: string) => void;
+  onClose: () => void;
+  onGoToToday: () => void;
+  jobs: Job[];
+}
+
+const CalendarSelector: React.FC<CalendarSelectorProps> = ({ currentDate, customHolidays, onSelect, onClose, onGoToToday, jobs }) => {
+  const [viewDate, setViewDate] = useState(new Date(currentDate));
+
+  useEffect(() => {
+    setViewDate(new Date(currentDate));
+  }, [currentDate]);
+  
+  const daysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+  const firstDayOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
+  const startOffset = (firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1); 
+  
+  const prevMonthDays = daysInMonth(viewDate.getFullYear(), viewDate.getMonth() - 1);
+  const currentMonthDays = daysInMonth(viewDate.getFullYear(), viewDate.getMonth());
+  
+  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  
+  const dayElements = [];
+  for (let i = startOffset - 1; i >= 0; i--) {
+    dayElements.push(<div key={`prev-${i}`} className="h-12 flex items-center justify-center text-slate-200 text-xs font-bold">{prevMonthDays - i}</div>);
+  }
+  
+  for (let i = 1; i <= currentMonthDays; i++) {
+    const dateStr = `${viewDate.getFullYear()}-${String(viewDate.getMonth() + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+    const isSelected = currentDate === dateStr;
+    const isToday = new Date().toISOString().split('T')[0] === dateStr;
+    const hasJobs = jobs.some(j => j.date === dateStr);
+    const holiday = isHoliday(dateStr, customHolidays);
+    
+    dayElements.push(
+      <button 
+        key={i} 
+        onClick={() => onSelect(dateStr)}
+        className={`h-12 rounded-xl flex flex-col items-center justify-center transition-all relative group ${
+          isSelected ? 'bg-blue-600 text-white shadow-lg' : 
+          holiday ? 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-100' :
+          'hover:bg-slate-50 text-slate-700'
+        }`}
+        title={holiday ? holiday.name : undefined}
+      >
+        <span className={`text-sm font-black ${isToday && !isSelected ? 'text-blue-600' : ''}`}>{i}</span>
+        <div className="flex gap-0.5 mt-0.5">
+          {hasJobs && (
+            <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-blue-400'}`} />
+          )}
+          {holiday && (
+            <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-amber-400'}`} />
+          )}
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[200] flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md p-8 animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-black text-slate-900 tracking-tighter italic">Saltar a fecha</h2>
+          <button onClick={onClose} className="p-2 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        
+        <div className="flex items-center justify-between mb-6 px-1">
+          <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1))} className="p-2 hover:bg-slate-100 rounded-xl transition-all"><ChevronLeft className="w-5 h-5 text-slate-400" /></button>
+          <div className="text-center">
+            <span className="text-base font-black text-slate-900 uppercase tracking-tight">{monthNames[viewDate.getMonth()]}</span>
+            <span className="text-base font-bold text-slate-400 ml-2">{viewDate.getFullYear()}</span>
+          </div>
+          <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1))} className="p-2 hover:bg-slate-100 rounded-xl transition-all"><ChevronRight className="w-5 h-5 text-slate-400" /></button>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1 text-center mb-2">
+          {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(d => (
+            <div key={d} className="text-[10px] font-black text-slate-300 uppercase tracking-widest py-2">{d}</div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {dayElements}
+        </div>
+
+        <div className="mt-8 flex flex-col gap-3">
+          <button 
+            onClick={onGoToToday}
+            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-all shadow-lg"
+          >
+            Hoy
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) => {
   // Rango de fechas por defecto: Hoy + 7 días
@@ -14,16 +115,50 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
   const nextWeek = new Date();
   nextWeek.setDate(nextWeek.getDate() + 7);
   
+  const [viewMode, setViewMode] = useState<'range' | 'day'>('range');
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(nextWeek.toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [showCalendarSelector, setShowCalendarSelector] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const formatDateDisplay = (dateStr: string) => {
+    try {
+      if (!dateStr) return 'Fecha inválida';
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return 'Fecha inválida';
+      
+      const options: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' };
+      const formatted = new Intl.DateTimeFormat('es-ES', options).format(date);
+      return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
+  const goToToday = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    setSelectedDate(todayStr);
+    setShowCalendarSelector(false);
+  };
+
+  const handleDateSelect = (date: string) => {
+    setSelectedDate(date);
+    setShowCalendarSelector(false);
+  };
 
   // Filtrar y preparar datos
   const rows = useMemo(() => {
     return planning.jobs
       .filter(job => {
-        const inDateRange = job.date >= startDate && job.date <= endDate;
-        if (!inDateRange) return false;
+        // Si está en modo día, filtrar solo por ese día
+        if (viewMode === 'day') {
+          if (job.date !== selectedDate) return false;
+        } else {
+          // Si está en modo rango, usar el rango de fechas
+          const inDateRange = job.date >= startDate && job.date <= endDate;
+          if (!inDateRange) return false;
+        }
 
         if (searchTerm === '') return true;
 
@@ -97,7 +232,7 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
           isFinished: job.isFinished
         };
       });
-  }, [planning.jobs, planning.clients, planning.workers, startDate, endDate, searchTerm]);
+  }, [planning.jobs, planning.clients, planning.workers, startDate, endDate, searchTerm, viewMode, selectedDate]);
 
   const exportCompactExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -118,7 +253,10 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, "Planificación Compacta");
-    XLSX.writeFile(wb, `Planificacion_Compacta_${startDate}_${endDate}.xlsx`);
+    const fileName = viewMode === 'day' 
+      ? `Planificacion_Compacta_${selectedDate}.xlsx`
+      : `Planificacion_Compacta_${startDate}_${endDate}.xlsx`;
+    XLSX.writeFile(wb, fileName);
   };
 
   return (
@@ -135,22 +273,78 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-sm">
-            <CalendarDays className="w-4 h-4 text-slate-400" />
-            <input 
-              type="date" 
-              className="text-xs font-bold text-slate-700 bg-transparent outline-none uppercase"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-            <ArrowRight className="w-3 h-3 text-slate-300" />
-            <input 
-              type="date" 
-              className="text-xs font-bold text-slate-700 bg-transparent outline-none uppercase"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
+          {/* Selector de modo: Rango o Día */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setViewMode('range')}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                viewMode === 'range'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Rango
+            </button>
+            <button
+              onClick={() => setViewMode('day')}
+              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                viewMode === 'day'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Día
+            </button>
           </div>
+
+          {viewMode === 'range' ? (
+            <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-sm">
+              <CalendarDays className="w-4 h-4 text-slate-400" />
+              <input 
+                type="date" 
+                className="text-xs font-bold text-slate-700 bg-transparent outline-none uppercase"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+              <ArrowRight className="w-3 h-3 text-slate-300" />
+              <input 
+                type="date" 
+                className="text-xs font-bold text-slate-700 bg-transparent outline-none uppercase"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+              <button onClick={() => {
+                const prevDate = new Date(selectedDate);
+                prevDate.setDate(prevDate.getDate() - 1);
+                setSelectedDate(prevDate.toISOString().split('T')[0]);
+              }} className="p-2 hover:bg-white rounded-lg shadow-sm transition-all text-slate-500">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button 
+                onClick={() => setShowCalendarSelector(true)} 
+                className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm text-xs font-black uppercase tracking-widest text-slate-700 hover:text-blue-600 transition-colors"
+              >
+                <CalendarDays className="w-4 h-4 text-blue-500" />
+                {formatDateDisplay(selectedDate)}
+              </button>
+              <button onClick={() => {
+                const nextDate = new Date(selectedDate);
+                nextDate.setDate(nextDate.getDate() + 1);
+                setSelectedDate(nextDate.toISOString().split('T')[0]);
+              }} className="p-2 hover:bg-white rounded-lg shadow-sm transition-all text-slate-500">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button 
+                onClick={goToToday} 
+                className="px-3 py-2 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-colors"
+              >
+                Hoy
+              </button>
+            </div>
+          )}
 
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -270,8 +464,24 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
       </div>
       <div className="bg-slate-50 border-t border-slate-200 px-4 py-2 text-[10px] text-slate-400 font-bold flex justify-between">
         <span>Mostrando {rows.length} registros</span>
-        <span>Rango: {formatDateDMY(startDate)} - {formatDateDMY(endDate)}</span>
+        <span>
+          {viewMode === 'day' 
+            ? `Día: ${formatDateDMY(selectedDate)}`
+            : `Rango: ${formatDateDMY(startDate)} - ${formatDateDMY(endDate)}`
+          }
+        </span>
       </div>
+
+      {showCalendarSelector && (
+        <CalendarSelector 
+          currentDate={selectedDate}
+          customHolidays={planning.customHolidays}
+          onSelect={handleDateSelect}
+          onClose={() => setShowCalendarSelector(false)}
+          onGoToToday={goToToday}
+          jobs={planning.jobs}
+        />
+      )}
     </div>
   );
 };
