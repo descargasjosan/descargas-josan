@@ -41,27 +41,7 @@ export const HOLIDAYS: Holiday[] = [
 ];
 
 export const MOCK_STANDARD_TASKS: StandardTask[] = [
-  {
-    id: 'st1',
-    name: 'Descarga Contenedor 20ft',
-    defaultWorkers: 2,
-    packages: '300-500',
-    refs: 'General'
-  },
-  {
-    id: 'st2',
-    name: 'Descarga Contenedor 40ft (Paletizado)',
-    defaultWorkers: 3,
-    packages: '20-24 Palets',
-    refs: 'SKU-A, SKU-B'
-  },
-  {
-    id: 'st3',
-    name: 'Descarga a Granel (Manual)',
-    defaultWorkers: 4,
-    packages: '1200 cajas',
-    refs: 'Varios'
-  }
+  // Array vacío - no hay tareas predefinidas
 ];
 
 export const MOCK_WORKERS: Worker[] = [
@@ -132,10 +112,7 @@ export const MOCK_CLIENTS: Client[] = [
     centers: [
       { id: 'center1', name: 'MAD4 - San Fernando', address: 'Calle Principal 123', publicTransport: true }
     ],
-    regularTasks: [
-      { id: 'rt1', name: 'Descarga Contenedor 40ft', defaultWorkers: 4, category: JobType.DESCARGA },
-      { id: 'rt2', name: 'Picking Urgente Sorter', defaultWorkers: 2, category: JobType.PICKING }
-    ],
+    regularTasks: [], // Eliminadas las plantillas rápidas
     requiredCourses: ["PRL Básico (60h)"],
     allowFreeTextTask: true
   },
@@ -152,9 +129,7 @@ export const MOCK_CLIENTS: Client[] = [
     centers: [
       { id: 'center2', name: 'BCN1 - El Prat', address: 'Polígono Ind. Sur 45', publicTransport: false }
     ],
-    regularTasks: [
-      { id: 'rt3', name: 'Etiquetado Textil', defaultWorkers: 6, category: JobType.MANIPULACION }
-    ],
+    regularTasks: [], // Eliminadas las plantillas rápidas
     requiredCourses: [],
     allowFreeTextTask: true
   }

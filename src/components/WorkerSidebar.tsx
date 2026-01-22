@@ -21,7 +21,8 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
   onSelectWorker
 }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
-  const [filterDiscontinuos, setFilterDiscontinuos] = React.useState(false);
+  const [availabilityFilter, setAvailabilityFilter] = React.useState<'all' | 'free' | 'assigned'>('all');
+  const [contractFilter, setContractFilter] = React.useState<'all' | 'fixedDiscontinuous' | 'others'>('all');
 
   // Función para acortar el nombre: "Juan Domínguez" -> "Juan D."
   const getShortName = (fullName: string) => {
@@ -41,10 +42,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
     const matchesSearch = w.name.toLowerCase().includes(searchTerm.toLowerCase()) || w.code.includes(searchTerm);
     if (!matchesSearch) return false;
 
-    // 3. Filtro rápido de Fijos Discontinuos
-    if (filterDiscontinuos && w.contractType !== ContractType.FIJO_DISCONTINUO) return false;
-    
-    // 4. Lógica de Estado
+    // 3. Lógica de Estado
     const isUnavailableStatus = [
       WorkerStatus.VACACIONES, 
       WorkerStatus.BAJA_MEDICA, 
@@ -55,15 +53,37 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
       // Si está en estado no disponible, verificamos si el periodo ya venció
       // Si la fecha actual es mayor a la fecha fin, el trabajador vuelve a estar visible
       if (w.statusEndDate && planning.currentDate > w.statusEndDate) {
-        return true; 
+        // Continuar con los demás filtros
+      } else {
+        return false; // Sigue no disponible
       }
-      return false; // Sigue no disponible
     }
 
     // Si el estado es DISPONIBLE o ACTIVO, verificamos si tiene un periodo de bloqueo temporal
     if (w.statusStartDate && w.statusEndDate) {
       const isInStatusPeriod = planning.currentDate >= w.statusStartDate && planning.currentDate <= w.statusEndDate;
       if (isInStatusPeriod) return false; // Ocultar si hoy está dentro del rango de bloqueo
+    }
+
+    // 4. Filtro por disponibilidad (libres/asignados)
+    if (availabilityFilter !== 'all') {
+      const todayJobs = planning.jobs.filter(job => job.date === planning.currentDate && !job.isCancelled);
+      const assignedWorkerIds = new Set(todayJobs.flatMap(job => job.assignedWorkerIds));
+      
+      if (availabilityFilter === 'free') {
+        if (assignedWorkerIds.has(w.id)) return false;
+      } else if (availabilityFilter === 'assigned') {
+        if (!assignedWorkerIds.has(w.id)) return false;
+      }
+    }
+
+    // 5. Filtro por tipo de contrato
+    if (contractFilter !== 'all') {
+      if (contractFilter === 'fixedDiscontinuous') {
+        if (w.contractType !== ContractType.FIJO_DISCONTINUO) return false;
+      } else if (contractFilter === 'others') {
+        if (w.contractType === ContractType.FIJO_DISCONTINUO) return false;
+      }
     }
 
     return true;
@@ -81,30 +101,94 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
             {filteredWorkers.length}
           </span>
         </div>
-        <div className="flex gap-1.5">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Buscar..."
-              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold focus:outline-none focus:ring-2 focus:ring-blue-50 transition-all"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+        
+        {/* Búsqueda */}
+        <div className="relative mb-2">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Buscar..."
+            className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-bold focus:outline-none focus:ring-2 focus:ring-blue-50 transition-all"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* Filtros Compactos */}
+        <div className="flex gap-1 flex-wrap">
+          {/* Filtro Disponibilidad */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => setAvailabilityFilter('all')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                availabilityFilter === 'all' 
+                  ? 'bg-blue-500 text-white border border-blue-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-blue-300 hover:text-blue-500'
+              }`}
+              title="Todos"
+            >
+              T
+            </button>
+            <button
+              onClick={() => setAvailabilityFilter('free')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                availabilityFilter === 'free' 
+                  ? 'bg-green-500 text-white border border-green-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-green-300 hover:text-green-500'
+              }`}
+              title="Libres"
+            >
+              L
+            </button>
+            <button
+              onClick={() => setAvailabilityFilter('assigned')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                availabilityFilter === 'assigned' 
+                  ? 'bg-amber-500 text-white border border-amber-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-500'
+              }`}
+              title="Asignados"
+            >
+              A
+            </button>
           </div>
-          {/* BOTÓN FILTRO DISCONTINUOS */}
-          <button 
-            onClick={() => setFilterDiscontinuos(!filterDiscontinuos)}
-            title="Filtrar Fijos Discontinuos"
-            className={`px-2 py-1.5 rounded-lg border text-[9px] font-[900] transition-all flex items-center gap-1 uppercase tracking-tighter ${
-              filterDiscontinuos 
-                ? 'bg-red-500 border-red-600 text-white shadow-sm' 
-                : 'bg-white border-slate-200 text-slate-400 hover:border-red-300 hover:text-red-500'
-            }`}
-          >
-            <Briefcase className={`w-3 h-3 ${filterDiscontinuos ? 'text-white' : 'text-slate-300'}`} />
-            F.D.
-          </button>
+
+          {/* Filtro Contrato */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => setContractFilter('all')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                contractFilter === 'all' 
+                  ? 'bg-blue-500 text-white border border-blue-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-blue-300 hover:text-blue-500'
+              }`}
+              title="Todos"
+            >
+              TC
+            </button>
+            <button
+              onClick={() => setContractFilter('fixedDiscontinuous')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                contractFilter === 'fixedDiscontinuous' 
+                  ? 'bg-purple-500 text-white border border-purple-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-purple-300 hover:text-purple-500'
+              }`}
+              title="Fijos Discontinuos"
+            >
+              FD
+            </button>
+            <button
+              onClick={() => setContractFilter('others')}
+              className={`px-2 py-1 rounded text-[8px] font-[900] uppercase transition-all ${
+                contractFilter === 'others' 
+                  ? 'bg-slate-500 text-white border border-slate-600' 
+                  : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-500'
+              }`}
+              title="Resto"
+            >
+              R
+            </button>
+          </div>
         </div>
       </div>
 

@@ -250,6 +250,8 @@ const App: React.FC = () => {
   const [notification, setNotification] = useState<{message: string, type: 'error' | 'success' | 'warning' | 'info'} | null>(null);
   const [workerTableSearch, setWorkerTableSearch] = useState('');
   const [showArchivedWorkers, setShowArchivedWorkers] = useState(false); 
+  const [workerAvailabilityFilter, setWorkerAvailabilityFilter] = useState<'all' | 'free' | 'assigned'>('all');
+  const [workerContractFilter, setWorkerContractFilter] = useState<'all' | 'fixedDiscontinuous' | 'others'>('all'); 
   const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'job' | 'worker' | 'client' | 'task', name: string } | null>(null);
   const [confirmDeleteCourse, setConfirmDeleteCourse] = useState<string | null>(null);
 
@@ -644,7 +646,14 @@ const App: React.FC = () => {
     showNotification("Cliente guardado", "success");
   };
 
-  const handleOpenNewStandardTask = () => setEditingStandardTask({ id: `st-${Date.now()}`, name: '', defaultWorkers: 2, packages: '', refs: '' });
+  const handleOpenNewStandardTask = () => setEditingStandardTask({ 
+  id: `st-${Date.now()}`, 
+  name: '', 
+  type: JobType.MANIPULACION,
+  defaultWorkers: 2, 
+  notes: '',
+  assignedClientIds: []
+});
   const saveStandardTask = (task: StandardTask) => {
     if(!task.name) return;
     setPlanning(prev => {
@@ -653,6 +662,15 @@ const App: React.FC = () => {
     });
     setEditingStandardTask(null);
     showNotification("Tarea estándar guardada", "success");
+  };
+
+  const deleteStandardTask = (taskId: string) => {
+    setPlanning(prev => ({
+      ...prev,
+      standardTasks: prev.standardTasks.filter(t => t.id !== taskId)
+    }));
+    setEditingStandardTask(null);
+    showNotification("Tarea eliminada", "success");
   };
 
   const handleAddGlobalCourse = () => {
@@ -760,8 +778,97 @@ const App: React.FC = () => {
       return d;
   }, [viewMode, planning.currentDate, rangeStartDate, rangeEndDate]);
 
-  const filteredWorkersTable = useMemo(() => planning.workers.filter(w => !showArchivedWorkers ? !w.isArchived : true).filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase())), [planning.workers, workerTableSearch, showArchivedWorkers]);
-  const filteredTasks = useMemo(() => planning.standardTasks.filter(t => t.name.toLowerCase().includes(taskSearch.toLowerCase())), [planning.standardTasks, taskSearch]);
+  // Función para limpiar datos antiguos incompatible con el nuevo formato
+  const cleanupOldData = useCallback((data: PlanningState): PlanningState => {
+    return {
+      ...data,
+      // Limpiar tareas estándar antiguas que no tienen el nuevo formato
+      standardTasks: data.standardTasks.filter(task => 
+        task && 
+        task.id && 
+        task.name && 
+        task.defaultWorkers && 
+        task.type && 
+        (task as any).assignedClientIds !== undefined
+      ),
+      // Limpiar plantillas rápidas antiguas de clientes
+      clients: data.clients.map(client => ({
+        ...client,
+        regularTasks: (client.regularTasks || []).filter(task => 
+          task && 
+          task.id && 
+          task.name && 
+          task.defaultWorkers && 
+          task.category
+        )
+      }))
+    };
+  }, []);
+
+  // Aplicar limpieza cuando los datos cambian
+  const cleanedPlanning = useMemo(() => cleanupOldData(planning), [planning, cleanupOldData]);
+
+  const filteredWorkersTable = useMemo(() => {
+  let workers = cleanedPlanning.workers.filter(w => !showArchivedWorkers ? !w.isArchived : true);
+  
+  // Filtrar por búsqueda
+  workers = workers.filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase()));
+  
+  // Filtrar por disponibilidad (libres/asignados)
+  if (workerAvailabilityFilter !== 'all') {
+    const todayJobs = cleanedPlanning.jobs.filter(job => job.date === cleanedPlanning.currentDate && !job.isCancelled);
+    const assignedWorkerIds = new Set(todayJobs.flatMap(job => job.assignedWorkerIds));
+    
+    if (workerAvailabilityFilter === 'free') {
+      workers = workers.filter(w => !assignedWorkerIds.has(w.id));
+    } else if (workerAvailabilityFilter === 'assigned') {
+      workers = workers.filter(w => assignedWorkerIds.has(w.id));
+    }
+  }
+  
+  // Filtrar por tipo de contrato
+  if (workerContractFilter !== 'all') {
+    if (workerContractFilter === 'fixedDiscontinuous') {
+      workers = workers.filter(w => w.contractType === ContractType.FIJO_DISCONTINUO);
+    } else if (workerContractFilter === 'others') {
+      workers = workers.filter(w => w.contractType !== ContractType.FIJO_DISCONTINUO);
+    }
+  }
+  
+  return workers;
+}, [cleanedPlanning.workers, workerTableSearch, showArchivedWorkers, workerAvailabilityFilter, workerContractFilter, cleanedPlanning.jobs, cleanedPlanning.currentDate]);
+  // Función para obtener las plantillas rápidas de un cliente (combinando regularTasks + standardTasks asignadas)
+  const getClientQuickTemplates = (clientId: string) => {
+    const client = cleanedPlanning.clients.find(c => c.id === clientId);
+    if (!client) return [];
+
+    // Plantillas originales del cliente (regularTasks) - con validación segura
+    const regularTemplates = (client.regularTasks || []).filter(task => 
+      task && task.id && task.name && task.defaultWorkers && task.category
+    );
+
+    // Plantillas de tareas estándar asignadas a este cliente - con validación segura
+    const standardTemplates = cleanedPlanning.standardTasks
+      .filter(task => {
+        // Validar que la tarea tenga el formato nuevo
+        if (!task || !task.id || !task.name || !task.defaultWorkers || !task.type) return false;
+        
+        // Validar que tenga assignedClientIds y que incluya este cliente
+        const assignedIds = (task as any).assignedClientIds;
+        return Array.isArray(assignedIds) && assignedIds.includes(clientId);
+      })
+      .map(task => ({
+        id: `st-${task.id}`,
+        name: task.name,
+        defaultWorkers: task.defaultWorkers,
+        category: task.type
+      }));
+
+    // Combinar ambas listas
+    return [...regularTemplates, ...standardTemplates];
+  };
+  
+  const filteredTasks = useMemo(() => cleanedPlanning.standardTasks.filter(t => t.name.toLowerCase().includes(taskSearch.toLowerCase())), [cleanedPlanning.standardTasks, taskSearch]);
   const notifiedCount = (planning.notifications[planning.currentDate] || []).length;
 
   if (isAuthLoading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
@@ -900,16 +1007,99 @@ const App: React.FC = () => {
                <h2 className="text-2xl font-black text-slate-900 italic uppercase">Gestión de Operarios</h2>
                <button onClick={handleOpenNewWorker} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Operario</button>
              </div>
-             <div className="bg-white rounded-[32px] border border-slate-200 p-6 shadow-sm mb-6 flex items-center gap-4 sticky top-0 z-10">
-                <Search className="w-5 h-5 text-slate-400" />
-                <input type="text" placeholder="Buscar operario..." className="flex-1 bg-transparent text-sm font-bold outline-none" value={workerTableSearch} onChange={(e) => setWorkerTableSearch(e.target.value)} />
-                <div className="flex items-center gap-3 border-l border-slate-100 pl-4">
-                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ver Archivados</span>
-                   <button onClick={() => setShowArchivedWorkers(!showArchivedWorkers)} className={`w-10 h-6 rounded-full p-1 transition-colors ${showArchivedWorkers ? 'bg-blue-600' : 'bg-slate-200'}`}>
-                      <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${showArchivedWorkers ? 'translate-x-4' : ''}`} />
-                   </button>
+             <div className="bg-white rounded-[32px] border border-slate-200 p-6 shadow-sm mb-6">
+                <div className="flex items-center gap-4 mb-4">
+                  <Search className="w-5 h-5 text-slate-400" />
+                  <input type="text" placeholder="Buscar operario..." className="flex-1 bg-transparent text-sm font-bold outline-none" value={workerTableSearch} onChange={(e) => setWorkerTableSearch(e.target.value)} />
                 </div>
-             </div>
+                
+                <div className="flex items-center gap-6 border-t border-slate-100 pt-4">
+                  {/* Filtro de Disponibilidad */}
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Disponibilidad</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setWorkerAvailabilityFilter('all')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerAvailabilityFilter === 'all' 
+                            ? 'bg-blue-100 text-blue-700 border border-blue-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Todos
+                      </button>
+                      <button
+                        onClick={() => setWorkerAvailabilityFilter('free')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerAvailabilityFilter === 'free' 
+                            ? 'bg-green-100 text-green-700 border border-green-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Libres
+                      </button>
+                      <button
+                        onClick={() => setWorkerAvailabilityFilter('assigned')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerAvailabilityFilter === 'assigned' 
+                            ? 'bg-amber-100 text-amber-700 border border-amber-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Asignados
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Filtro de Contrato */}
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Contrato</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setWorkerContractFilter('all')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerContractFilter === 'all' 
+                            ? 'bg-blue-100 text-blue-700 border border-blue-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Todos
+                      </button>
+                      <button
+                        onClick={() => setWorkerContractFilter('fixedDiscontinuous')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerContractFilter === 'fixedDiscontinuous' 
+                            ? 'bg-purple-100 text-purple-700 border border-purple-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Fijos Discontinuos
+                      </button>
+                      <button
+                        onClick={() => setWorkerContractFilter('others')}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${
+                          workerContractFilter === 'others' 
+                            ? 'bg-slate-100 text-slate-700 border border-slate-200' 
+                            : 'bg-white text-slate-400 border border-slate-200'
+                        }`}
+                      >
+                        Resto
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Filtro de Archivados */}
+                  <div className="flex items-center gap-3 border-l border-slate-100 pl-6">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Archivados</span>
+                    <button 
+                      onClick={() => setShowArchivedWorkers(!showArchivedWorkers)} 
+                      className={`w-10 h-6 rounded-full p-1 transition-colors ${showArchivedWorkers ? 'bg-blue-600' : 'bg-slate-200'}`}
+                    >
+                      <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${showArchivedWorkers ? 'translate-x-4' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+              </div>
              <div className="bg-white rounded-[32px] border border-slate-200 overflow-hidden shadow-sm">
                <table className="w-full text-left border-collapse">
                  <thead className="bg-slate-100 border-b border-slate-200 sticky top-0 z-10">
@@ -1000,9 +1190,46 @@ const App: React.FC = () => {
                {dbTab === 'tasks' && (
                  <div>
                     <button onClick={handleOpenNewStandardTask} className="mb-4 bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-black uppercase">Nueva Tarea</button>
-                    {filteredTasks.map(t => (
-                      <div key={t.id} onClick={() => setEditingStandardTask(t)} className="bg-white p-3 mb-2 rounded-xl border border-slate-200 cursor-pointer font-bold text-sm hover:border-blue-400">{t.name}</div>
-                    ))}
+                    <div className="space-y-2">
+                      {filteredTasks.map(t => (
+                        <div key={t.id} onClick={() => setEditingStandardTask(t)} className="bg-white p-4 rounded-xl border border-slate-200 cursor-pointer hover:border-blue-400 transition-colors">
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <h3 className="font-black text-slate-900 mb-1">{t.name}</h3>
+                              <div className="flex items-center gap-4 text-xs text-slate-500">
+                                <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded-md font-black uppercase">
+                                  {(t as any).type || 'Sin tipo'}
+                                </span>
+                                <span className="font-black">{t.defaultWorkers} operarios</span>
+                              </div>
+                              {t.notes && <p className="text-xs text-slate-400 mt-2 line-clamp-2">{t.notes}</p>}
+                            </div>
+                            <div className="flex flex-col items-end gap-2">
+                              <span className="text-xs text-slate-400">
+                                {(t as any).assignedClientIds?.length || 0} cliente{(t as any).assignedClientIds?.length !== 1 ? 's' : ''}
+                              </span>
+                              {(t as any).assignedClientIds && (t as any).assignedClientIds.length > 0 && (
+                                <div className="flex flex-wrap gap-1 max-w-32">
+                                  {(t as any).assignedClientIds.slice(0, 2).map((clientId: string) => {
+                                    const client = planning.clients.find(c => c.id === clientId);
+                                    return client ? (
+                                      <span key={clientId} className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-black">
+                                        {client.name.split(' ')[0]}
+                                      </span>
+                                    ) : null;
+                                  })}
+                                  {(t as any).assignedClientIds.length > 2 && (
+                                    <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-black">
+                                      +{(t as any).assignedClientIds.length - 2}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                  </div>
                )}
                {dbTab === 'courses' && (
@@ -1176,14 +1403,14 @@ const App: React.FC = () => {
                     </div>
                  </div>
 
-                 {editingJob.clientId && planning.clients.find(c => c.id === editingJob.clientId)?.regularTasks?.length ? (
+                 {editingJob.clientId && getClientQuickTemplates(editingJob.clientId)?.length ? (
                     <div className="animate-in fade-in slide-in-from-top-2">
                        <div className="flex items-center gap-2 mb-2">
                           <Sparkles className="w-3 h-3 text-amber-500" />
                           <label className="text-[10px] font-black text-amber-600 uppercase tracking-widest">Plantillas Rápidas</label>
                        </div>
                        <div className="flex flex-wrap gap-2">
-                          {planning.clients.find(c => c.id === editingJob.clientId)?.regularTasks.map(task => (
+                          {getClientQuickTemplates(editingJob.clientId).map(task => (
                              <button
                                 key={task.id}
                                 onClick={() => setEditingJob({
@@ -2060,6 +2287,154 @@ const App: React.FC = () => {
                 })()}
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* MODAL EDICIÓN TAREA ESTÁNDAR */}
+    {editingStandardTask && (
+      <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setEditingStandardTask(null)}>
+        <div className="bg-white w-full max-w-lg rounded-[24px] p-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
+          
+          <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-3">
+            <h2 className="text-lg font-black text-slate-900 italic uppercase tracking-tighter">
+              {editingStandardTask.id.startsWith('st-') ? 'Nueva Tarea' : 'Editar Tarea'}
+            </h2>
+            <div className="flex items-center gap-2">
+              {!editingStandardTask.id.startsWith('st-') && (
+                <button
+                  onClick={() => deleteStandardTask(editingStandardTask.id)}
+                  className="p-1.5 hover:bg-red-50 rounded-full transition-colors text-red-500"
+                  title="Eliminar tarea"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+              <button onClick={() => setEditingStandardTask(null)} className="p-1.5 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {/* Nombre */}
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Nombre</label>
+              <input
+                type="text"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-bold text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-50"
+                value={editingStandardTask.name}
+                onChange={e => setEditingStandardTask({...editingStandardTask, name: e.target.value})}
+                placeholder="Nombre de la tarea"
+              />
+            </div>
+
+            {/* Tipo de Servicio y Nº Operarios en una fila */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Tipo</label>
+                <select
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-bold text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-50"
+                  value={editingStandardTask.type}
+                  onChange={e => setEditingStandardTask({...editingStandardTask, type: e.target.value as JobType})}
+                >
+                  <option value="">Seleccionar</option>
+                  <option value={JobType.CARGA}>Carga</option>
+                  <option value={JobType.DESCARGA}>Descarga</option>
+                  <option value={JobType.PICKING}>Picking</option>
+                  <option value={JobType.MANIPULACION}>Manipulación</option>
+                  <option value={JobType.OPERATIVA_EXTERNA}>Operativa Ext.</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Operarios</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-bold text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-50"
+                  value={editingStandardTask.defaultWorkers}
+                  onChange={e => setEditingStandardTask({...editingStandardTask, defaultWorkers: parseInt(e.target.value) || 1})}
+                />
+              </div>
+            </div>
+
+            {/* Notas - más compacto */}
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Notas (máx. 8 palabras)</label>
+              <textarea
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-bold text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-50 resize-none"
+                rows={2}
+                maxLength={80}
+                value={editingStandardTask.notes}
+                onChange={e => {
+                  const words = e.target.value.trim().split(/\s+/);
+                  if (words.length <= 8) {
+                    setEditingStandardTask({...editingStandardTask, notes: e.target.value});
+                  }
+                }}
+                placeholder="Notas breves sobre la tarea..."
+              />
+              <p className="text-[10px] text-slate-400">
+                {editingStandardTask.notes.trim().split(/\s+/).filter(w => w).length}/8 palabras
+              </p>
+            </div>
+
+            {/* Asignación a Clientes - más compacto */}
+            <div className="space-y-2">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Asignar a Clientes</label>
+              <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 max-h-32 overflow-y-auto custom-scrollbar">
+                <div className="grid grid-cols-2 gap-2">
+                  {planning.clients.map(client => (
+                    <label key={client.id} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1.5 rounded transition-colors">
+                      <input
+                        type="checkbox"
+                        className="w-3 h-3 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                        checked={editingStandardTask.assignedClientIds.includes(client.id)}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setEditingStandardTask({
+                              ...editingStandardTask,
+                              assignedClientIds: [...editingStandardTask.assignedClientIds, client.id]
+                            });
+                          } else {
+                            setEditingStandardTask({
+                              ...editingStandardTask,
+                              assignedClientIds: editingStandardTask.assignedClientIds.filter(id => id !== client.id)
+                            });
+                          }
+                        }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-black text-xs text-slate-900 truncate">{client.name}</p>
+                        <p className="text-[9px] text-slate-500 truncate">{client.location}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400">
+                Clientes que verán esta plantilla rápida
+              </p>
+            </div>
+          </div>
+
+          {/* Botones de acción */}
+          <div className="flex gap-3 mt-6 pt-4 border-t border-slate-100">
+            <button
+              onClick={() => setEditingStandardTask(null)}
+              className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-lg font-black text-[10px] uppercase tracking-wider hover:bg-slate-200 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => saveStandardTask(editingStandardTask)}
+              disabled={!editingStandardTask.name || !editingStandardTask.type}
+              className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-black text-[10px] uppercase tracking-wider hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {editingStandardTask.id.startsWith('st-') ? 'Crear' : 'Guardar'}
+            </button>
           </div>
         </div>
       </div>

@@ -58,9 +58,10 @@ export interface RegularTask {
 export interface StandardTask {
   id: string;
   name: string;
+  type: JobType;
   defaultWorkers: number;
-  packages: string; 
-  refs: string;     
+  notes: string;
+  assignedClientIds: string[];
 }
 
 export interface Worker {
