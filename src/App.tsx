@@ -1,13 +1,10 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Sparkles, AlertTriangle, X,
-  Building2, Users, Search, Mail, MapPin, Car, Edit2, LayoutGrid, CalendarDays, Clock, 
-  Trash2, RotateCcw, Cloud, CloudOff, Loader2, Database, BarChart3, DownloadCloud,
-  ClipboardList, Package, Hash, BookOpen, GraduationCap, StickyNote, Stethoscope,
-  MessageCircle, Send, CheckCircle2, ListTodo, UserCircle, Save, Download, Upload, FileSpreadsheet,
-  FileText, Briefcase, Archive, Phone, Filter, ArrowRight, LayoutList, Fuel, Euro, Table, RefreshCcw, Copy, Bus, Settings, CalendarPlus, ChevronDown, TrendingUp,
-  ToggleLeft, ToggleRight, Play, CheckSquare
+  Users, Building2, Database, Car, BarChart3, Settings, LogOut, Plus, Edit2, Trash2, Save, 
+  Upload, Download, Search, X, Calendar, Clock, MapPin, UserCheck, AlertTriangle, 
+  ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
+  Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -145,22 +142,24 @@ const App: React.FC = () => {
 
   const defaultState: PlanningState = { 
     currentDate: new Date().toISOString().split('T')[0], 
-    workers: MOCK_WORKERS, 
-    clients: MOCK_CLIENTS, 
-    jobs: MOCK_JOBS, 
+    workers: [], // Array vacío - se cargará desde Supabase
+    clients: [], // Array vacío - se cargará desde Supabase
+    jobs: [], // Array vacío - se cargará desde Supabase
     customHolidays: [], 
     notifications: {},
     availableCourses: AVAILABLE_COURSES,
-    standardTasks: MOCK_STANDARD_TASKS,
+    standardTasks: [], // Array vacío - se cargará desde Supabase
     dailyNotes: [],
     fuelRecords: [],
-    vehicles: MOCK_VEHICLES,
+    vehicles: [], // Array vacío - se cargará desde Supabase
     vehicleAssignments: []
   };
 
   const [planning, setPlanning] = useState<PlanningState>(defaultState);
   
   const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving'>('connected');
+  const [dataRecoveryMode, setDataRecoveryMode] = useState(false);
+  const [remoteDataExists, setRemoteDataExists] = useState(false);
   const isRemoteUpdate = useRef(false);
   const isLoaded = useRef(false);
 
@@ -174,27 +173,43 @@ const App: React.FC = () => {
         if (data && data.data && Object.keys(data.data).length > 0) {
           const remoteData = data.data;
           
-          // ESTRATEGIA DEFENSIVA DE CARGA:
-          // Fusionamos los datos remotos con el estado por defecto para garantizar
-          // que si faltan campos nuevos (como vehicles), se usen los valores por defecto (arrays vacíos).
-          const mergedState = {
-             ...defaultState, 
-             ...remoteData,   
-             // Aseguramos explícitamente arrays críticos
-             workers: remoteData.workers || defaultState.workers,
-             clients: remoteData.clients || defaultState.clients,
-             jobs: remoteData.jobs || [],
-             vehicles: remoteData.vehicles || defaultState.vehicles,
-             vehicleAssignments: remoteData.vehicleAssignments || [],
-             currentDate: new Date().toISOString().split('T')[0] // Siempre arrancamos en hoy
-          };
+          // Verificar si hay datos significativos en remoto
+          const hasRealData = (
+            (remoteData.workers && remoteData.workers.length > 0) ||
+            (remoteData.clients && remoteData.clients.length > 0) ||
+            (remoteData.jobs && remoteData.jobs.length > 0)
+          );
+          
+          if (hasRealData) {
+            // ESTRATEGIA DEFENSIVA DE CARGA:
+            // Usamos datos remotos como base y solo completamos campos que faltan
+            const mergedState = {
+               ...remoteData,   // Datos remotos como base
+               ...defaultState,  // Solo para campos que no existan en remoto
+               // Aseguramos explícitamente arrays críticos SOLO si no existen
+               workers: Array.isArray(remoteData.workers) ? remoteData.workers : defaultState.workers,
+               clients: Array.isArray(remoteData.clients) ? remoteData.clients : defaultState.clients,
+               jobs: Array.isArray(remoteData.jobs) ? remoteData.jobs : [],
+               vehicles: Array.isArray(remoteData.vehicles) ? remoteData.vehicles : defaultState.vehicles,
+               vehicleAssignments: Array.isArray(remoteData.vehicleAssignments) ? remoteData.vehicleAssignments : [],
+               standardTasks: Array.isArray(remoteData.standardTasks) ? remoteData.standardTasks : defaultState.standardTasks,
+               currentDate: new Date().toISOString().split('T')[0] // Siempre arrancamos en hoy
+            };
 
-          setPlanning(mergedState);
-          setDbStatus('connected');
+            setPlanning(mergedState);
+            setRemoteDataExists(true);
+            setDbStatus('connected');
+          } else {
+            // Hay datos en remoto pero están vacíos, inicializamos con datos de ejemplo
+            setRemoteDataExists(false);
+            setDataRecoveryMode(true);
+            setDbStatus('connected');
+          }
         } else {
-          // Si no hay datos, inicializamos
-          await supabase.from('planning_snapshots').upsert({ id: 1, data: defaultState });
-          setDbStatus('connected'); 
+          // No hay datos en remoto
+          setRemoteDataExists(false);
+          setDataRecoveryMode(true);
+          setDbStatus('connected');
         }
         
         isLoaded.current = true;
@@ -868,6 +883,53 @@ const App: React.FC = () => {
     return [...regularTemplates, ...standardTemplates];
   };
   
+  const loadExampleData = () => {
+    const exampleState = {
+      ...defaultState,
+      workers: MOCK_WORKERS,
+      clients: MOCK_CLIENTS,
+      jobs: MOCK_JOBS,
+      vehicles: MOCK_VEHICLES,
+      standardTasks: MOCK_STANDARD_TASKS
+    };
+    setPlanning(exampleState);
+    setDataRecoveryMode(false);
+    showNotification("Datos de ejemplo cargados", "success");
+  };
+
+  const tryRecoverData = async () => {
+    try {
+      setDbStatus('loading');
+      const { data } = await supabase.from('planning_snapshots').select('data').eq('id', 1).single();
+      
+      if (data && data.data) {
+        const remoteData = data.data;
+        const mergedState = {
+           ...remoteData,
+           ...defaultState,
+           workers: Array.isArray(remoteData.workers) ? remoteData.workers : defaultState.workers,
+           clients: Array.isArray(remoteData.clients) ? remoteData.clients : defaultState.clients,
+           jobs: Array.isArray(remoteData.jobs) ? remoteData.jobs : [],
+           vehicles: Array.isArray(remoteData.vehicles) ? remoteData.vehicles : defaultState.vehicles,
+           vehicleAssignments: Array.isArray(remoteData.vehicleAssignments) ? remoteData.vehicleAssignments : [],
+           standardTasks: Array.isArray(remoteData.standardTasks) ? remoteData.standardTasks : defaultState.standardTasks,
+           currentDate: new Date().toISOString().split('T')[0]
+        };
+        setPlanning(mergedState);
+        setRemoteDataExists(true);
+        setDataRecoveryMode(false);
+        showNotification("Datos recuperados correctamente", "success");
+      } else {
+        showNotification("No se encontraron datos para recuperar", "error");
+      }
+      setDbStatus('connected');
+    } catch (e) {
+      console.error("Error recuperando datos:", e);
+      showNotification("Error al recuperar datos", "error");
+      setDbStatus('error');
+    }
+  };
+  
   const filteredTasks = useMemo(() => cleanedPlanning.standardTasks.filter(t => t.name.toLowerCase().includes(taskSearch.toLowerCase())), [cleanedPlanning.standardTasks, taskSearch]);
   const notifiedCount = (planning.notifications[planning.currentDate] || []).length;
 
@@ -879,25 +941,78 @@ const App: React.FC = () => {
       <input type="file" ref={backupInputRef} className="hidden" accept=".json,.xlsx,.xls" onChange={importData} />
       
       {notification && (
-        <div className={`fixed top-6 right-6 z-[300] flex items-center gap-4 px-6 py-4 rounded-3xl shadow-2xl border transition-all animate-in fade-in slide-in-from-top-6 ${notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : notification.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-700'}`}>
-          <div className="w-8 h-8 rounded-full flex items-center justify-center bg-white shadow-sm">
-             {notification.type === 'warning' ? <AlertTriangle className="w-4 h-4 text-amber-500" /> : <Sparkles className={`w-4 h-4 ${notification.type === 'error' ? 'text-red-500' : 'text-green-500'}`} />}
+        <div className={`fixed top-4 right-4 z-50 max-w-sm p-4 rounded-xl shadow-lg border transform transition-all duration-300 ${
+          notification.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' :
+          notification.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+          notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' :
+          'bg-blue-50 border-blue-200 text-blue-800'
+        }`}>
+          <div className="flex items-start gap-3">
+            {notification.type === 'success' && <CheckCircle className="w-5 h-5 flex-shrink-0" />}
+            {notification.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
+            {notification.type === 'error' && <XCircle className="w-5 h-5 flex-shrink-0" />}
+            {notification.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
+            <div>
+              <p className="font-bold text-sm">{notification.message}</p>
+            </div>
+            <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-600">
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div><p className="font-black text-xs uppercase tracking-tight">{notification.message}</p></div>
         </div>
       )}
 
-      {itemToDelete && (
-        <div className="fixed inset-0 z-[500] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
-           <div className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full animate-in zoom-in-95">
-              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mb-6 mx-auto"><Trash2 className="w-8 h-8" /></div>
-              <h3 className="text-xl font-black text-slate-900 text-center mb-2 uppercase italic">¿Estás seguro?</h3>
-              <p className="text-sm text-slate-500 text-center mb-8 font-medium leading-relaxed">Vas a eliminar <strong>{itemToDelete.name}</strong>. Esta acción no se puede deshacer.</p>
-              <div className="flex gap-3">
-                 <button onClick={() => setItemToDelete(null)} className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-colors">Cancelar</button>
-                 <button onClick={executeDelete} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-700 shadow-lg shadow-red-200 transition-all">Eliminar</button>
+      {/* MODAL DE RECUPERACIÓN DE DATOS */}
+      {dataRecoveryMode && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-[24px] p-6 shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Database className="w-8 h-8 text-amber-600" />
               </div>
-           </div>
+              <h2 className="text-xl font-black text-slate-900 mb-2">Recuperación de Datos</h2>
+              <p className="text-sm text-slate-600 mb-4">
+                No se encontraron datos guardados en la base de datos.
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                <p className="text-xs text-amber-800">
+                  <strong>Importante:</strong> Tus datos anteriores deberían estar guardados en Supabase. 
+                  Elige una opción para continuar.
+                </p>
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <button
+                onClick={tryRecoverData}
+                disabled={dbStatus === 'loading'}
+                className="w-full py-3 bg-blue-600 text-white rounded-lg font-black text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {dbStatus === 'loading' ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Buscando datos...
+                  </div>
+                ) : (
+                  "Intentar recuperar datos anteriores"
+                )}
+              </button>
+              
+              <button
+                onClick={loadExampleData}
+                className="w-full py-3 bg-slate-100 text-slate-600 rounded-lg font-black text-sm hover:bg-slate-200 transition-colors"
+              >
+                Cargar datos de ejemplo
+              </button>
+              
+              <button
+                onClick={() => setDataRecoveryMode(false)}
+                className="w-full py-3 bg-white border border-slate-200 text-slate-500 rounded-lg font-black text-sm hover:bg-slate-50 transition-colors"
+              >
+                Continuar con aplicación vacía
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
