@@ -4,7 +4,9 @@ import {
   Users, Building2, Database, Car, BarChart3, Settings, LogOut, Plus, Edit2, Trash2, Save, 
   Upload, Download, Search, X, Calendar, Clock, MapPin, UserCheck, AlertTriangle, 
   ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
-  Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles
+  Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles, ChevronLeft, ChevronRight, LayoutGrid,
+  Calendar as CalendarIcon, Table, DownloadCloud, CalendarDays, MessageCircle, Copy, TrendingUp,
+  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -160,6 +162,8 @@ const App: React.FC = () => {
   const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving'>('connected');
   const [dataRecoveryMode, setDataRecoveryMode] = useState(false);
   const [remoteDataExists, setRemoteDataExists] = useState(false);
+  const [advancedRecovery, setAdvancedRecovery] = useState(false);
+  const [recoverySnapshots, setRecoverySnapshots] = useState([]);
   const isRemoteUpdate = useRef(false);
   const isLoaded = useRef(false);
 
@@ -900,6 +904,44 @@ const App: React.FC = () => {
   const tryRecoverData = async () => {
     try {
       setDbStatus('loading');
+      
+      // Intentar recuperar de snapshots anteriores
+      const { data: snapshots } = await supabase
+        .from('planning_snapshots')
+        .select('*')
+        .order('updated_at', { ascending: false })
+        .limit(10);
+      
+      if (snapshots && snapshots.length > 1) {
+        // Buscar el snapshot más antiguo con datos reales
+        for (const snapshot of snapshots) {
+          if (snapshot.data && 
+              snapshot.data.workers && snapshot.data.workers.length > 0 &&
+              snapshot.data.clients && snapshot.data.clients.length > 0) {
+            
+            const mergedState = {
+               ...snapshot.data,
+               ...defaultState,
+               workers: Array.isArray(snapshot.data.workers) ? snapshot.data.workers : defaultState.workers,
+               clients: Array.isArray(snapshot.data.clients) ? snapshot.data.clients : defaultState.clients,
+               jobs: Array.isArray(snapshot.data.jobs) ? snapshot.data.jobs : [],
+               vehicles: Array.isArray(snapshot.data.vehicles) ? snapshot.data.vehicles : defaultState.vehicles,
+               vehicleAssignments: Array.isArray(snapshot.data.vehicleAssignments) ? snapshot.data.vehicleAssignments : [],
+               standardTasks: Array.isArray(snapshot.data.standardTasks) ? snapshot.data.standardTasks : defaultState.standardTasks,
+               currentDate: new Date().toISOString().split('T')[0]
+            };
+            
+            setPlanning(mergedState);
+            setRemoteDataExists(true);
+            setDataRecoveryMode(false);
+            showNotification(`Datos recuperados del ${new Date(snapshot.updated_at).toLocaleString()}`, "success");
+            setDbStatus('connected');
+            return;
+          }
+        }
+      }
+      
+      // Si no hay snapshots anteriores, intentar el actual
       const { data } = await supabase.from('planning_snapshots').select('data').eq('id', 1).single();
       
       if (data && data.data) {
@@ -926,6 +968,110 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Error recuperando datos:", e);
       showNotification("Error al recuperar datos", "error");
+      setDbStatus('error');
+    }
+  };
+  
+  const advancedDataRecovery = async () => {
+    try {
+      setDbStatus('loading');
+      showNotification("Buscando datos en todos los backups...", "info");
+      
+      let bestData = null;
+      let bestSource = "";
+      let bestDate = null;
+      
+      // 1. Buscar en snapshots históricos
+      const { data: snapshots } = await supabase
+        .from('planning_snapshots')
+        .select('*')
+        .order('updated_at', { ascending: false })
+        .limit(20);
+      
+      if (snapshots) {
+        for (const snapshot of snapshots) {
+          if (snapshot.data && 
+              snapshot.data.workers && snapshot.data.workers.length > 5 &&
+              snapshot.data.clients && snapshot.data.clients.length > 1) {
+            
+            bestData = snapshot.data;
+            bestSource = `Snapshot del ${new Date(snapshot.updated_at).toLocaleString()}`;
+            bestDate = snapshot.updated_at;
+            break;
+          }
+        }
+      }
+      
+      // 2. Buscar en tablas alternativas (si existen)
+      if (!bestData) {
+        try {
+          const { data: backupData } = await supabase
+            .from('planning_backup')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(5);
+          
+          if (backupData && backupData.length > 0) {
+            bestData = backupData[0].data;
+            bestSource = `Backup del ${new Date(backupData[0].created_at).toLocaleString()}`;
+            bestDate = backupData[0].created_at;
+          }
+        } catch (e) {
+          console.log("No se encontró tabla de backup");
+        }
+      }
+      
+      // 3. Buscar en localStorage (último recurso)
+      if (!bestData) {
+        try {
+          const localData = localStorage.getItem('planning_backup');
+          if (localData) {
+            const parsed = JSON.parse(localData);
+            if (parsed.workers && parsed.workers.length > 0) {
+              bestData = parsed;
+              bestSource = "Local Storage del navegador";
+              bestDate = new Date().toISOString();
+            }
+          }
+        } catch (e) {
+          console.log("No se encontró backup local");
+        }
+      }
+      
+      if (bestData) {
+        const mergedState = {
+           ...bestData,
+           ...defaultState,
+           workers: Array.isArray(bestData.workers) ? bestData.workers : defaultState.workers,
+           clients: Array.isArray(bestData.clients) ? bestData.clients : defaultState.clients,
+           jobs: Array.isArray(bestData.jobs) ? bestData.jobs : [],
+           vehicles: Array.isArray(bestData.vehicles) ? bestData.vehicles : defaultState.vehicles,
+           vehicleAssignments: Array.isArray(bestData.vehicleAssignments) ? bestData.vehicleAssignments : [],
+           standardTasks: Array.isArray(bestData.standardTasks) ? bestData.standardTasks : defaultState.standardTasks,
+           currentDate: new Date().toISOString().split('T')[0]
+        };
+        
+        setPlanning(mergedState);
+        setRemoteDataExists(true);
+        setDataRecoveryMode(false);
+        setAdvancedRecovery(false);
+        showNotification(`¡DATOS RECUPERADOS! Fuente: ${bestSource}`, "success");
+        
+        // Restaurar los datos recuperados a Supabase
+        await supabase.from('planning_snapshots').upsert({ 
+          id: 1, 
+          data: mergedState, 
+          updated_at: new Date() 
+        });
+        
+      } else {
+        showNotification("No se encontraron datos en ningún backup", "error");
+      }
+      
+      setDbStatus('connected');
+    } catch (e) {
+      console.error("Error en recuperación avanzada:", e);
+      showNotification("Error en recuperación avanzada", "error");
       setDbStatus('error');
     }
   };
@@ -995,6 +1141,21 @@ const App: React.FC = () => {
                   </div>
                 ) : (
                   "Intentar recuperar datos anteriores"
+                )}
+              </button>
+              
+              <button
+                onClick={advancedDataRecovery}
+                disabled={dbStatus === 'loading'}
+                className="w-full py-3 bg-purple-600 text-white rounded-lg font-black text-sm hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {dbStatus === 'loading' ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Búsqueda avanzada...
+                  </div>
+                ) : (
+                  "🔍 Búsqueda Avanzada (Todos los backups)"
                 )}
               </button>
               
