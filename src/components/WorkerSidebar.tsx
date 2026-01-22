@@ -1,8 +1,8 @@
 
 import React from 'react';
 import { Search, User, Car, Euro, CalendarCheck, Briefcase } from 'lucide-react';
-import { Worker, PlanningState, WorkerStatus, ContractType } from '../types';
-import { checkContinuityRisk } from '../utils';
+import { Worker, PlanningState, WorkerStatus, ContractType } from '../lib/types';
+import { checkContinuityRisk } from '../lib/utils';
 
 interface WorkerSidebarProps {
   workers: Worker[];
@@ -32,24 +32,41 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
     return `${firstName} ${lastNameInitial}.`;
   };
 
-  // FILTRO: Activos O (Inactivos cuya fecha de fin ya pasó respecto a la fecha de planificación)
-  // ADEMÁS: Excluimos los archivados (isArchived === true)
-  // NUEVO: Filtro opcional por contrato Fijo Discontinuo
+  // FILTRO: Muestra trabajadores activos/disponibles y gestiona las fechas de bajas/vacaciones
   const filteredWorkers = workers.filter(w => {
-    // Si está archivado, no se muestra en la agenda diaria
+    // 1. Descartar archivados
     if (w.isArchived) return false;
 
+    // 2. Filtro de búsqueda (Nombre o Código)
     const matchesSearch = w.name.toLowerCase().includes(searchTerm.toLowerCase()) || w.code.includes(searchTerm);
-    
-    const isActive = w.status === WorkerStatus.ACTIVO || w.status === WorkerStatus.DISPONIBLE;
-    
-    // Si tiene fecha de fin (ej: fin de vacaciones), verificamos si para la fecha actual del planning ya ha vuelto.
-    const isBackFromLeave = w.statusEndDate ? planning.currentDate > w.statusEndDate : false;
+    if (!matchesSearch) return false;
 
-    // Filtro por tipo de contrato
-    const matchesContract = !filterDiscontinuos || w.contractType === ContractType.FIJO_DISCONTINUO;
+    // 3. Filtro rápido de Fijos Discontinuos
+    if (filterDiscontinuos && w.contractType !== ContractType.FIJO_DISCONTINUO) return false;
+    
+    // 4. Lógica de Estado
+    const isUnavailableStatus = [
+      WorkerStatus.VACACIONES, 
+      WorkerStatus.BAJA_MEDICA, 
+      WorkerStatus.BAJA_PATERNIDAD
+    ].includes(w.status);
 
-    return (isActive || isBackFromLeave) && matchesSearch && matchesContract;
+    if (isUnavailableStatus) {
+      // Si está en estado no disponible, verificamos si el periodo ya venció
+      // Si la fecha actual es mayor a la fecha fin, el trabajador vuelve a estar visible
+      if (w.statusEndDate && planning.currentDate > w.statusEndDate) {
+        return true; 
+      }
+      return false; // Sigue no disponible
+    }
+
+    // Si el estado es DISPONIBLE o ACTIVO, verificamos si tiene un periodo de bloqueo temporal
+    if (w.statusStartDate && w.statusEndDate) {
+      const isInStatusPeriod = planning.currentDate >= w.statusStartDate && planning.currentDate <= w.statusEndDate;
+      if (isInStatusPeriod) return false; // Ocultar si hoy está dentro del rango de bloqueo
+    }
+
+    return true;
   });
 
   return (
@@ -98,7 +115,8 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
           const assignedJobsCount = planning.jobs.filter(j => j.date === planning.currentDate && !j.isCancelled && j.assignedWorkerIds.includes(worker.id)).length;
           const continuityGaps = checkContinuityRisk(worker, planning.currentDate, planning.jobs, planning.customHolidays);
           
-          const isTechnicallyInactive = worker.status !== WorkerStatus.ACTIVO && worker.status !== WorkerStatus.DISPONIBLE;
+          // Verificar si está técnicamente inactivo pero disponible por fecha (recuperado)
+          const isRecovered = [WorkerStatus.VACACIONES, WorkerStatus.BAJA_MEDICA, WorkerStatus.BAJA_PATERNIDAD].includes(worker.status) && worker.statusEndDate && planning.currentDate > worker.statusEndDate;
           
           let avatarClass = '';
           if (worker.contractType === ContractType.INDEFINIDO) {
@@ -128,8 +146,8 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
                 ${avatarClass}
               `}>
                 {worker.code}
-                {isTechnicallyInactive && (
-                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border border-white" title="Disponible por fecha" />
+                {isRecovered && (
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border border-white" title="Disponible por fin de periodo" />
                 )}
               </div>
 
@@ -144,7 +162,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
                       <Euro className="w-2.5 h-2.5 text-amber-500 shrink-0" />
                     </div>
                   )}
-                  {isTechnicallyInactive && (
+                  {isRecovered && (
                     <div title="Vuelta de baja/vacaciones">
                       <CalendarCheck className="w-2.5 h-2.5 text-green-500 shrink-0" />
                     </div>

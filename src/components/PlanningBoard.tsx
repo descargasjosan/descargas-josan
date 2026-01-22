@@ -1,22 +1,24 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText } from 'lucide-react';
-import { Job, PlanningState, Worker, WorkerStatus, ContractType } from '../types';
-import { isTimeOverlap, checkContinuityRisk, formatDateDMY } from '../utils';
+import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText, List } from 'lucide-react';
+import { Job, PlanningState, Worker, WorkerStatus, ContractType, ReinforcementGroup } from '../lib/types';
+import { isTimeOverlap, checkContinuityRisk, formatDateDMY } from '../lib/utils';
 
 interface PlanningBoardProps {
   planning: PlanningState;
-  datesToShow: string[]; // MODIFICADO: Recibe un array de fechas para renderizar
+  datesToShow: string[];
   onDropWorker: (workerId: string, jobId: string) => void;
   onRemoveWorker: (workerId: string, jobId: string) => void;
-  onAddJob: (clientId: string, date: string) => void; // MODIFICADO: Recibe la fecha específica
+  onAddJob: (clientId: string, date: string) => void; 
   onEditJob: (job: Job) => void;
   onDuplicateJob: (job: Job) => void;
+  onShowWorkerList: (clientId: string, centerId: string, date: string) => void;
   draggedWorkerId: string | null;
   onDragStartFromBoard: (workerId: string, jobId: string) => void;
   onReorderJob: (sourceJobId: string, targetJobId: string) => void;
   onReorderClient: (sourceClientId: string, targetClientId: string) => void;
-  onEditNote: (workerId: string) => void; 
+  onEditNote: (workerId: string, date: string) => void;
+  onUpdateJobReinforcementGroups: (jobId: string, groups: ReinforcementGroup[]) => void;
 }
 
 const PlanningBoard: React.FC<PlanningBoardProps> = ({ 
@@ -27,11 +29,13 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   onAddJob,
   onEditJob,
   onDuplicateJob,
+  onShowWorkerList,
   draggedWorkerId,
   onDragStartFromBoard,
   onReorderJob,
   onReorderClient,
-  onEditNote
+  onEditNote,
+  onUpdateJobReinforcementGroups
 }) => {
   const [dragOverJobId, setDragOverJobId] = useState<string | null>(null);
   const [dragOverClientId, setDragOverClientId] = useState<string | null>(null);
@@ -41,6 +45,12 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   // ESTADO PARA MENÚ CONTEXTUAL
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, workerId: string } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  
+  // ESTADO PARA MODAL DE GRUPOS DE REFUERZO
+  const [reinforcementModal, setReinforcementModal] = useState<{ jobId: string, groups: ReinforcementGroup[] } | null>(null);
+  const [newGroupTime, setNewGroupTime] = useState<string>('');
+  const [reinforcementWorkerSearch, setReinforcementWorkerSearch] = useState<string>('');
+  const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
 
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -89,9 +99,43 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
       setContextMenu({ x: e.clientX, y: e.clientY, workerId });
   };
 
-  const filteredWorkers = planning.workers.filter(w => 
-    w.status === WorkerStatus.ACTIVO && (w.name.toLowerCase().includes(workerSearch.toLowerCase()) || w.code.includes(workerSearch))
-  );
+  // Filtrado robusto de trabajadores para el selector
+  const filteredWorkers = planning.workers.filter(w => {
+    const matchesSearch = w.name.toLowerCase().includes(workerSearch.toLowerCase()) || w.code.includes(workerSearch);
+    if (!matchesSearch) return false;
+
+    // Verificar disponibilidad real (considerando fechas de fin de baja/vacaciones)
+    const currentDate = datesToShow.length > 0 ? datesToShow[0] : new Date().toISOString().split('T')[0];
+    
+    // Si el estado es "NO DISPONIBLE", comprobar si ya ha expirado
+    const isUnavailableStatus = [
+      WorkerStatus.VACACIONES, 
+      WorkerStatus.BAJA_MEDICA, 
+      WorkerStatus.BAJA_PATERNIDAD
+    ].includes(w.status);
+
+    if (isUnavailableStatus) {
+       // Si no tiene fecha fin, o la fecha fin es futura, no mostrar
+       if (!w.statusEndDate || w.statusEndDate >= currentDate) {
+          return false;
+       }
+       // Si la fecha fin ya pasó, se considera disponible
+    } else if (w.status !== WorkerStatus.DISPONIBLE) {
+       // Otros estados no disponibles
+       return false;
+    }
+
+    // Verificar bloqueos temporales específicos
+    if (w.statusStartDate && w.statusEndDate) {
+      const isInStatusPeriod = currentDate >= w.statusStartDate && currentDate <= w.statusEndDate;
+      // Si está en periodo de bloqueo y NO es uno de los estados que ya comprobamos arriba (que ya sabemos que expiró si llegamos aquí)
+      // En realidad, si llegamos aquí es porque o es DISPONIBLE o expiró el estado anterior.
+      // Pero si tiene un rango explícito de "bloqueo" siendo DISPONIBLE (caso raro), lo respetamos.
+      if (isInStatusPeriod && w.status === WorkerStatus.DISPONIBLE) return false;
+    }
+
+    return true;
+  });
 
   const getEffectiveEndTime = (job: Job) => {
     if (job.isFinished && job.actualEndTime) return job.actualEndTime;
@@ -149,31 +193,38 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
               <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><input autoFocus type="text" placeholder="Buscar por nombre o código..." className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold focus:ring-4 focus:ring-blue-50 outline-none" value={workerSearch} onChange={(e) => setWorkerSearch(e.target.value)} /></div>
             </div>
             <div className="max-h-[350px] overflow-y-auto p-2 custom-scrollbar">
-              {filteredWorkers.map(worker => {
-                const targetJob = planning.jobs.find(j => j.id === selectorJobId);
-                const continuityGaps = targetJob ? checkContinuityRisk(worker, targetJob.date, planning.jobs, planning.customHolidays) : null;
-                
-                let itemClass = '';
-                if (worker.contractType === ContractType.INDEFINIDO) {
-                    itemClass = 'bg-slate-900 text-white group-hover:bg-slate-800';
-                } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
-                    itemClass = 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white';
-                } else {
-                    itemClass = 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white';
-                }
+              {filteredWorkers.length === 0 ? (
+                 <div className="p-8 text-center opacity-50">
+                    <Users className="w-12 h-12 mx-auto mb-2 text-slate-300" />
+                    <p className="text-xs font-bold text-slate-400">No se encontraron operarios disponibles</p>
+                 </div>
+              ) : (
+                filteredWorkers.map(worker => {
+                  const targetJob = planning.jobs.find(j => j.id === selectorJobId);
+                  const continuityGaps = targetJob ? checkContinuityRisk(worker, targetJob.date, planning.jobs, planning.customHolidays) : null;
+                  
+                  let itemClass = '';
+                  if (worker.contractType === ContractType.INDEFINIDO) {
+                      itemClass = 'bg-slate-900 text-white group-hover:bg-slate-800';
+                  } else if (worker.contractType === ContractType.AUTONOMO || worker.contractType === ContractType.AUTONOMA_COLABORADORA) {
+                      itemClass = 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white';
+                  } else {
+                      itemClass = 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white';
+                  }
 
-                return (
-                  <button key={worker.id} onClick={() => { onDropWorker(worker.id, selectorJobId); setSelectorJobId(null); setWorkerSearch(''); }} className="w-full flex items-center justify-between p-3 hover:bg-blue-50 rounded-2xl transition-all group border border-transparent hover:border-blue-100 mb-1">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-[10px] font-black transition-colors ${itemClass}`}>
-                        {worker.code}
+                  return (
+                    <button key={worker.id} onClick={() => { onDropWorker(worker.id, selectorJobId); setSelectorJobId(null); setWorkerSearch(''); }} className="w-full flex items-center justify-between p-3 hover:bg-blue-50 rounded-2xl transition-all group border border-transparent hover:border-blue-100 mb-1">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-[10px] font-black transition-colors ${itemClass}`}>
+                          {worker.code}
+                        </div>
+                        <div className="text-left"><p className="text-sm font-black text-slate-900 tracking-tight group-hover:text-blue-700">{worker.name}</p><p className="text-[10px] font-bold text-slate-400 uppercase">{worker.role}</p></div>
                       </div>
-                      <div className="text-left"><p className="text-sm font-black text-slate-900 tracking-tight group-hover:text-blue-700">{worker.name}</p><p className="text-[10px] font-bold text-slate-400 uppercase">{worker.role}</p></div>
-                    </div>
-                    {continuityGaps && <Euro className="w-4 h-4 text-amber-500" />}
-                  </button>
-                );
-              })}
+                      {continuityGaps && <Euro className="w-4 h-4 text-amber-500" />}
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -360,12 +411,30 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                       <Plus className="w-2.5 h-2.5 rotate-45" />
                                       <span className="text-[8px] font-black uppercase tracking-widest">Tarea</span>
                                     </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover/actions:opacity-100 transition-opacity z-30 relative">
-                                      <button onClick={() => onDuplicateJob(job)} className="p-0.5 text-slate-300 hover:text-blue-600 transition-colors" title="Duplicar tarea">
+                                    <div className="flex items-center gap-1 z-30 relative">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); onDuplicateJob(job); }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="p-0.5 text-slate-400 hover:text-blue-600 transition-colors" 
+                                        title="Duplicar tarea"
+                                      >
                                         <CalendarPlus className="w-3 h-3" />
                                       </button>
-                                      <button onClick={() => onEditJob(job)} className="p-0.5 text-slate-300 hover:text-blue-600 transition-colors" title="Editar tarea">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); onEditJob(job); }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="p-0.5 text-slate-400 hover:text-blue-600 transition-colors" 
+                                        title="Editar tarea"
+                                      >
                                         <Edit2 className="w-2.5 h-2.5" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); onShowWorkerList(job.clientId, job.centerId, job.date); }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="p-0.5 text-slate-400 hover:text-green-600 transition-colors" 
+                                        title="Listado de operarios"
+                                      >
+                                        <List className="w-2.5 h-2.5" />
                                       </button>
                                     </div>
                                   </div>
@@ -481,13 +550,39 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                   ))}
                                   
                                   {!isFull && !isCancelled && !isFinishedManual && !isFinishedTime && (
-                                    <button 
-                                      onClick={() => setSelectorJobId(job.id)} 
-                                      className="w-6 h-6 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all"
-                                      title="Añadir Operario"
-                                    >
-                                      <Plus className="w-3 h-3" />
-                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      <button 
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setReinforcementModal({ 
+                                            jobId: job.id, 
+                                            groups: job.reinforcementGroups || []
+                                          });
+                                        }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className={`w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                                          (job.reinforcementGroups?.length || 0) > 0 
+                                            ? 'bg-blue-100 text-blue-600 hover:bg-blue-200 border border-blue-300' 
+                                            : 'border border-dashed border-slate-300 text-slate-300 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50'
+                                        }`}
+                                        title={(job.reinforcementGroups?.length || 0) > 0 ? `${job.reinforcementGroups?.length} grupo(s) de refuerzo` : "Configurar grupos de refuerzo"}
+                                      >
+                                        <Clock className="w-3 h-3" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setSelectorJobId(job.id);
+                                        }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="w-6 h-6 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all cursor-pointer"
+                                        title="Añadir Operario"
+                                      >
+                                        <Plus className="w-3 h-3" />
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -509,6 +604,177 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
           );
         })}
       </div>
+
+      {/* MODAL PARA CONFIGURAR GRUPOS DE REFUERZO */}
+      {reinforcementModal && (
+        <div className="fixed inset-0 z-[400] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setReinforcementModal(null)}>
+          <div className="bg-white rounded-[24px] p-6 shadow-2xl w-96 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-black text-slate-900">Grupos de Refuerzo</h3>
+              <button onClick={() => setReinforcementModal(null)} className="p-1 hover:bg-slate-100 rounded-lg transition-colors">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+            
+            {/* Lista de grupos existentes */}
+            {reinforcementModal.groups.length > 0 && (
+              <div className="space-y-3 mb-6">
+                <h4 className="text-sm font-black text-slate-700 uppercase tracking-wider">Grupos Configurados</h4>
+                {reinforcementModal.groups.map((group, index) => (
+                  <div key={group.id} className="bg-slate-50 rounded-xl p-4 border border-slate-200">
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-blue-500" />
+                        <span className="font-black text-sm">{group.startTime}</span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          const updatedGroups = reinforcementModal.groups.filter(g => g.id !== group.id);
+                          onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
+                          setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                        }}
+                        className="text-red-400 hover:text-red-600 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    
+                    {/* Operarios asignados a este grupo */}
+                    <div className="space-y-1">
+                      {group.workerIds.map(workerId => {
+                        const worker = planning.workers.find(w => w.id === workerId);
+                        return worker ? (
+                          <div key={workerId} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 text-xs">
+                            <span className="font-medium">{worker.name}</span>
+                            <button 
+                              onClick={() => {
+                                const updatedGroups = reinforcementModal.groups.map(g => 
+                                  g.id === group.id 
+                                    ? { ...g, workerIds: g.workerIds.filter(id => id !== workerId) }
+                                    : g
+                                );
+                                onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
+                                setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                              }}
+                              className="text-slate-300 hover:text-red-500 transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : null;
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Añadir nuevo grupo */}
+            <div className="space-y-4">
+              <h4 className="text-sm font-black text-slate-700 uppercase tracking-wider">Añadir Nuevo Grupo</h4>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">
+                  Hora de inicio
+                </label>
+                <input
+                  type="time"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                  value={newGroupTime}
+                  onChange={e => setNewGroupTime(e.target.value)}
+                />
+              </div>
+
+              {/* Selector de operarios */}
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">
+                  Operarios de refuerzo
+                </label>
+                
+                {/* Filtro de búsqueda */}
+                <div className="relative mb-3">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar operario o código..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    value={reinforcementWorkerSearch}
+                    onChange={e => setReinforcementWorkerSearch(e.target.value)}
+                  />
+                </div>
+
+                {/* Lista de operarios filtrados */}
+                <div className="max-h-40 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl bg-slate-50">
+                  {planning.workers
+                    .filter(w => !w.isArchived && w.status === WorkerStatus.DISPONIBLE)
+                    .filter(w => 
+                      reinforcementWorkerSearch === '' || 
+                      w.name.toLowerCase().includes(reinforcementWorkerSearch.toLowerCase()) ||
+                      w.code.toLowerCase().includes(reinforcementWorkerSearch.toLowerCase())
+                    )
+                    .map(worker => {
+                      const isAlreadyAssigned = reinforcementModal.groups.some(g => g.workerIds.includes(worker.id));
+                      const isSelected = selectedWorkers.includes(worker.id);
+                      
+                      return (
+                        <div key={worker.id} className="flex items-center justify-between p-3 hover:bg-white rounded-lg transition-colors">
+                          <span className="text-sm font-medium">{worker.name} ({worker.code})</span>
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                            disabled={isAlreadyAssigned}
+                            checked={isAlreadyAssigned || isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedWorkers([...selectedWorkers, worker.id]);
+                              } else {
+                                setSelectedWorkers(selectedWorkers.filter(id => id !== worker.id));
+                              }
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                </div>
+
+                {/* Botón para añadir seleccionados */}
+                {selectedWorkers.length > 0 && newGroupTime && (
+                  <button
+                    onClick={() => {
+                      const updatedGroups = [...reinforcementModal.groups, {
+                        id: `group-${Date.now()}`,
+                        startTime: newGroupTime,
+                        workerIds: selectedWorkers,
+                        createdAt: new Date().toISOString()
+                      }];
+                      onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
+                      setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                      setSelectedWorkers([]);
+                      setNewGroupTime('');
+                    }}
+                    className="w-full mt-3 py-3 bg-blue-600 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 transition-colors"
+                  >
+                    Añadir {selectedWorkers.length} operario(s) a las {newGroupTime}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button 
+                onClick={() => {
+                  setReinforcementModal(null);
+                  setNewGroupTime('');
+                  setReinforcementWorkerSearch('');
+                  setSelectedWorkers([]);
+                }}
+                className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

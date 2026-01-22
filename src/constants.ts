@@ -1,3 +1,3 @@
 // ARCHIVO OBSOLETO. NO USAR.
-// Importar desde './lib/types'
+// Importar desde './lib/constants'
 export {};

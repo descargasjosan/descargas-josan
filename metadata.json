@@ -1,5 +1,5 @@
 {
-  "name": "Descargas Josan",
+  "name": "Descargas Josan v2",
   "description": "Aplicación avanzada para la planificación diaria de equipos de carga, descarga y logística, con detección automática de conflictos y optimización de recursos.",
   "requestFramePermissions": [
     "geolocation"

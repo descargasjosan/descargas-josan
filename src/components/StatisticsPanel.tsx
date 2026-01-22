@@ -5,8 +5,8 @@ import {
   TrendingUp, Activity, Calculator, ArrowRight, Ban, X, FileText, AlertCircle, Download, FileSpreadsheet, User, Briefcase, CheckCircle2, Stethoscope, StickyNote
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PlanningState, Job, Worker, NoteType } from '../types';
-import { formatDateDMY } from '../utils';
+import { PlanningState, Job, Worker, NoteType } from '../lib/types';
+import { formatDateDMY } from '../lib/utils';
 
 interface StatisticsPanelProps {
   planning: PlanningState;

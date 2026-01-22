@@ -1,7 +1,16 @@
 
-import { WorkerStatus, JobType, Worker, Client, Job, ContractType, Holiday, StandardTask } from './types';
+import { WorkerStatus, JobType, Worker, Client, Job, ContractType, Holiday, StandardTask, Vehicle } from './types';
 
 const today = new Date().toISOString().split('T')[0];
+
+export const WORKER_ROLES = [
+  'Mozo',
+  'Carretillero',
+  'Jefe de Equipo',
+  'Administrativo',
+  'Conductor',
+  'Limpieza'
+];
 
 export const AVAILABLE_COURSES = [
   "PRL Básico (60h)",
@@ -14,7 +23,6 @@ export const AVAILABLE_COURSES = [
 ];
 
 export const HOLIDAYS: Holiday[] = [
-  // Nacionales 2025
   { date: '2025-01-01', name: 'Año Nuevo', isLocal: false },
   { date: '2025-01-06', name: 'Reyes Magos', isLocal: false },
   { date: '2025-04-18', name: 'Viernes Santo', isLocal: false },
@@ -26,14 +34,12 @@ export const HOLIDAYS: Holiday[] = [
   { date: '2025-12-08', name: 'Inmaculada Concepción', isLocal: false },
   { date: '2025-12-25', name: 'Navidad', isLocal: false },
   
-  // Locales Valencia (Ciudad) 2025
   { date: '2025-01-22', name: 'San Vicente Mártir', isLocal: true },
   { date: '2025-03-19', name: 'San José (Fallas)', isLocal: true },
   { date: '2025-04-21', name: 'Lunes de Pascua (S.V. Ferrer)', isLocal: true },
   { date: '2025-10-09', name: 'Día de la Comunitat Valenciana', isLocal: true },
 ];
 
-// MOCK DATA PARA LA NUEVA SECCIÓN DE TRABAJOS
 export const MOCK_STANDARD_TASKS: StandardTask[] = [
   {
     id: 'st1',
@@ -66,7 +72,7 @@ export const MOCK_WORKERS: Worker[] = [
     dni: '12345678A',
     phone: '600111222',
     role: 'Carretillero', 
-    status: WorkerStatus.ACTIVO, 
+    status: WorkerStatus.DISPONIBLE, 
     contractType: ContractType.FIJO,
     hasVehicle: true, 
     startTime: '08:00', 
@@ -83,7 +89,7 @@ export const MOCK_WORKERS: Worker[] = [
     dni: '87654321B',
     phone: '600333444',
     role: 'Mozo', 
-    status: WorkerStatus.ACTIVO, 
+    status: WorkerStatus.DISPONIBLE, 
     contractType: ContractType.FIJO_DISCONTINUO,
     hasVehicle: false, 
     startTime: '09:00', 
@@ -100,7 +106,7 @@ export const MOCK_WORKERS: Worker[] = [
     dni: '45678912C',
     phone: '600555666',
     role: 'Mozo', 
-    status: WorkerStatus.ACTIVO, 
+    status: WorkerStatus.DISPONIBLE, 
     contractType: ContractType.FIJO_DISCONTINUO,
     hasVehicle: true, 
     startTime: '08:00', 
@@ -167,5 +173,27 @@ export const MOCK_JOBS: Job[] = [
     assignedWorkerIds: ['w1', 'w2'],
     ref: '#OP-8832',
     locationDetails: 'Muelle 12'
+  }
+];
+
+export const MOCK_VEHICLES: Vehicle[] = [
+  {
+    id: 'v1',
+    plate: '1234 KLR',
+    brand: 'Renault',
+    model: 'Kangoo',
+    status: 'active',
+    nextItvDate: '2025-06-15',
+    notes: 'Furgoneta principal reparto'
+  },
+  {
+    id: 'v2',
+    plate: '9876 HBB',
+    brand: 'Peugeot',
+    model: 'Partner',
+    status: 'active',
+    nextItvDate: '2024-12-01',
+    nextRevisionDate: '2025-02-01',
+    notes: 'Golpe en puerta trasera'
   }
 ];

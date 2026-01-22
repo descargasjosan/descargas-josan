@@ -1,5 +1,5 @@
+
 export enum WorkerStatus {
-  ACTIVO = 'Activo',
   VACACIONES = 'Vacaciones',
   BAJA_MEDICA = 'Baja Médica',
   BAJA_PATERNIDAD = 'Baja Paternidad',
@@ -32,19 +32,18 @@ export interface DailyNote {
   type: NoteType;
 }
 
-// NUEVO: Registro de repostaje
 export interface FuelRecord {
   id: string;
   workerId: string;
   date: string;
-  liters?: number; // Opcional
+  liters?: number;
   cost: number;
-  odometer?: number; // Kilometraje del vehículo al repostar
+  odometer?: number;
   notes?: string;
 }
 
 export interface Holiday {
-  date: string; // YYYY-MM-DD
+  date: string;
   name: string;
   isLocal: boolean;
 }
@@ -72,6 +71,7 @@ export interface Worker {
   phone: string;
   role: string;
   status: WorkerStatus;
+  statusStartDate?: string;
   statusEndDate?: string;
   contractType: ContractType;
   hasVehicle: boolean;
@@ -82,6 +82,7 @@ export interface Worker {
   skills: JobType[];
   completedCourses: string[]; 
   isArchived?: boolean; 
+  notes?: string;
 }
 
 export interface WorkCenter {
@@ -109,6 +110,13 @@ export interface Client {
   allowFreeTextTask: boolean;
 }
 
+export interface ReinforcementGroup {
+  id: string;
+  startTime: string;
+  workerIds: string[];
+  createdAt: string;
+}
+
 export interface Job {
   id: string;
   date: string;
@@ -120,7 +128,8 @@ export interface Job {
   endTime: string;
   requiredWorkers: number;
   assignedWorkerIds: string[];
-  workerTimes?: Record<string, string>; // workerId -> startTime (para refuerzos)
+  workerTimes?: Record<string, string>;
+  reinforcementGroups?: ReinforcementGroup[]; // Grupos de refuerzo con múltiples horarios
   ref?: string;
   deliveryNote?: string;
   locationDetails?: string;
@@ -128,6 +137,31 @@ export interface Job {
   cancellationReason?: string; 
   isFinished?: boolean; 
   actualEndTime?: string; 
+}
+
+// --- NUEVOS TIPOS PARA GESTIÓN DE FLOTA ---
+
+export interface Vehicle {
+  id: string;
+  plate: string;        // Matrícula
+  brand: string;        // Marca
+  model: string;        // Modelo
+  alias?: string;       // Nombre interno (ej: "Furgoneta 1")
+  purchaseDate?: string;
+  nextItvDate?: string;
+  nextRevisionDate?: string;
+  nextTireChangeDate?: string;
+  insuranceExpiryDate?: string;
+  status: 'active' | 'repair' | 'inactive';
+  notes?: string;
+}
+
+export interface VehicleAssignment {
+  id: string;
+  vehicleId: string;
+  workerId: string;
+  date: string;
+  startTime?: string; // Opcional, por defecto turno completo
 }
 
 export interface PlanningState {
@@ -140,7 +174,9 @@ export interface PlanningState {
   availableCourses: string[]; 
   standardTasks: StandardTask[]; 
   dailyNotes: DailyNote[]; 
-  fuelRecords: FuelRecord[]; // NUEVO: Array para guardar los repostajes
+  fuelRecords: FuelRecord[];
+  vehicles: Vehicle[]; // Nuevo campo
+  vehicleAssignments: VehicleAssignment[]; // Nuevo campo
 }
 
-export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact';
+export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact' | 'fleet';

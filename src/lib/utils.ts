@@ -1,9 +1,7 @@
+
 import { Job, Worker, WorkerStatus, Holiday, ContractType, Client } from './types';
 import { HOLIDAYS } from './constants';
 
-/**
- * Formatea una fecha de YYYY-MM-DD a DD-MM-YYYY para visualización
- */
 export const formatDateDMY = (dateStr?: string): string => {
   if (!dateStr) return '';
   const [year, month, day] = dateStr.split('-');
@@ -11,19 +9,13 @@ export const formatDateDMY = (dateStr?: string): string => {
   return `${day}-${month}-${year}`;
 };
 
-/**
- * Checks if a date is a public holiday (static, custom or recurring)
- */
 export const isHoliday = (dateStr: string, customHolidays: Holiday[] = []): Holiday | undefined => {
-  // 1. Check custom holidays first
   const custom = customHolidays.find(h => h.date === dateStr);
   if (custom) return custom;
 
-  // 2. Check static holidays (usually current year)
   const staticHoliday = HOLIDAYS.find(h => h.date === dateStr);
   if (staticHoliday) return staticHoliday;
 
-  // 3. Check recurring holidays (Fixed date every year)
   const date = new Date(dateStr);
   const month = date.getMonth() + 1;
   const day = date.getDate();
@@ -39,7 +31,6 @@ export const isHoliday = (dateStr: string, customHolidays: Holiday[] = []): Holi
     '12-06': 'Constitución Española',
     '12-08': 'Inmaculada Concepción',
     '12-25': 'Navidad',
-    // Valencia locals (typically fixed)
     '01-22': 'San Vicente Mártir',
     '03-19': 'San José (Fallas)',
     '10-09': 'Día de la Comunitat Valenciana'
@@ -52,7 +43,6 @@ export const isHoliday = (dateStr: string, customHolidays: Holiday[] = []): Holi
   return undefined;
 };
 
-// Fix: Added missing isTimeOverlap utility to check for shift conflicts
 export const isTimeOverlap = (s1: string, e1: string, s2: string, e2: string): boolean => {
   return s1 < e2 && s2 < e1;
 };
@@ -66,7 +56,6 @@ export const isWorkingDay = (dateStr: string, customHolidays: Holiday[] = []): b
   return !isWeekend(dateStr) && !isHoliday(dateStr, customHolidays);
 };
 
-// Función estándar para fechas disponibles (salta festivos y findes)
 export const getPreviousWorkingDay = (dateStr: string, customHolidays: Holiday[] = []): string => {
   let date = new Date(dateStr);
   let daysToSubtract = 1;
@@ -81,8 +70,6 @@ export const getPreviousWorkingDay = (dateStr: string, customHolidays: Holiday[]
   return dateStr;
 };
 
-// NUEVA FUNCIÓN: Obtiene el día anterior saltando SOLO fines de semana (Lunes -> Viernes).
-// Ignora si el viernes fue festivo o no, simplemente busca el día cronológico L-V anterior.
 export const getPreviousWeekday = (dateStr: string): string => {
   const date = new Date(dateStr);
   let daysToSubtract = 1;
@@ -90,13 +77,12 @@ export const getPreviousWeekday = (dateStr: string): string => {
     const prevDate = new Date(date);
     prevDate.setDate(date.getDate() - daysToSubtract);
     const day = prevDate.getDay();
-    // 0 es Domingo, 6 es Sábado. Si no es ninguno, devolvemos la fecha.
     if (day !== 0 && day !== 6) {
       return prevDate.toISOString().split('T')[0];
     }
     daysToSubtract++;
   }
-  return dateStr; // Fallback
+  return dateStr;
 };
 
 export const getNonWorkingDaysBetween = (startStr: string, endStr: string, customHolidays: Holiday[] = []): string[] => {
@@ -121,7 +107,6 @@ export const checkContinuityRisk = (worker: Worker, currentDate: string, allJobs
   const gaps = getNonWorkingDaysBetween(prevWorkingDay, currentDate, customHolidays);
   if (gaps.length === 0) return null;
   
-  // MODIFICADO: Ignorar tareas anuladas en la verificación de continuidad
   const workedPrevDay = allJobs.some(j => j.date === prevWorkingDay && !j.isCancelled && j.assignedWorkerIds.includes(worker.id));
   
   return workedPrevDay ? gaps : null;
@@ -132,13 +117,25 @@ export const validateAssignment = (
   job: Job,
   allJobs: Job[],
   customHolidays: Holiday[] = [],
-  clients: Client[] = [] // Nuevo parámetro opcional para validar cursos
+  clients: Client[] = [] 
 ): { error: string | null; warning: string | null } => {
-  if (worker.status !== WorkerStatus.ACTIVO) return { error: `Estado: ${worker.status}`, warning: null };
+  // Verificar si el operario está disponible o si su estado no disponible ha finalizado
+  if (worker.status !== WorkerStatus.DISPONIBLE) {
+    // Si tiene fecha de fin de estado, verificar si la tarea es posterior
+    if (worker.statusEndDate) {
+      if (job.date <= worker.statusEndDate) {
+        return { error: `Estado: ${worker.status} hasta ${formatDateDMY(worker.statusEndDate)}`, warning: null };
+      }
+      // Si la tarea es posterior al fin del estado, permitir la asignación
+    } else {
+      // Si no tiene fecha de fin, no permitir asignación
+      return { error: `Estado: ${worker.status}`, warning: null };
+    }
+  }
+  
   if (worker.restrictedClientIds?.includes(job.clientId)) return { error: `Restricción cliente`, warning: null };
   if (job.assignedWorkerIds.includes(worker.id)) return { error: 'Ya asignado', warning: null };
   
-  // 1. Validación de Cursos (Formación)
   const client = clients.find(c => c.id === job.clientId);
   if (client && client.requiredCourses && client.requiredCourses.length > 0) {
     const workerCourses = worker.completedCourses || [];

@@ -1,8 +1,9 @@
+
 import { createClient } from '@supabase/supabase-js';
 
 // 1. Intentamos leer las variables de entorno (esto funcionará en Vercel y en tu PC)
-const envUrl = import.meta.env?.VITE_SUPABASE_URL;
-const envKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
+const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
 
 // 2. Valores por defecto SOLO para que el Preview de AI Studio no se rompa
 const FALLBACK_URL = 'https://zblasxlrrjeycwjefitp.supabase.co';
