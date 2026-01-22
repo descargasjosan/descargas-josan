@@ -6,7 +6,7 @@ import {
   ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
   Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles, ChevronLeft, ChevronRight, LayoutGrid,
   Calendar as CalendarIcon, Table, DownloadCloud, CalendarDays, MessageCircle, Copy, TrendingUp,
-  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send
+  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -746,17 +746,61 @@ const App: React.FC = () => {
   };
 
   const exportBackup = () => {
-      const dataStr = JSON.stringify(planning, null, 2);
+      const dataStr = JSON.stringify(cleanedPlanning, null, 2);
       const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `backup_${planning.currentDate}.json`;
+      link.download = `backup_${cleanedPlanning.currentDate}.json`;
       link.click();
   };
   const exportDatabaseToExcel = () => showNotification("Función de exportación completa disponible", "info"); 
   const downloadExcelTemplate = () => showNotification("Plantilla descargada", "info");
-  const importData = (e: React.ChangeEvent<HTMLInputElement>) => { console.log(e.target.files); showNotification("Importación simulada", "success"); };
+  const importData = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      setDbStatus('loading');
+      showNotification("Importando datos...", "info");
+      
+      if (file.name.endsWith('.json')) {
+        const text = await file.text();
+        const importedData = JSON.parse(text);
+        
+        // Validar y limpiar datos importados
+        const cleanedImported = {
+          ...defaultState,
+          ...importedData,
+          workers: Array.isArray(importedData.workers) ? importedData.workers : defaultState.workers,
+          clients: Array.isArray(importedData.clients) ? importedData.clients : defaultState.clients,
+          jobs: Array.isArray(importedData.jobs) ? importedData.jobs : [],
+          vehicles: Array.isArray(importedData.vehicles) ? importedData.vehicles : defaultState.vehicles,
+          vehicleAssignments: Array.isArray(importedData.vehicleAssignments) ? importedData.vehicleAssignments : [],
+          standardTasks: Array.isArray(importedData.standardTasks) ? importedData.standardTasks : defaultState.standardTasks,
+          currentDate: new Date().toISOString().split('T')[0]
+        };
+        
+        setPlanning(cleanedImported);
+        await supabase.from('planning_snapshots').upsert({ 
+          id: 1, 
+          data: cleanedImported, 
+          updated_at: new Date() 
+        });
+        
+        showNotification("¡Datos importados y guardados correctamente!", "success");
+      } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        showNotification("Importación Excel próximamente disponible", "warning");
+      }
+      
+      setDbStatus('connected');
+      setShowBackupModal(false);
+    } catch (error) {
+      console.error("Error importando datos:", error);
+      showNotification("Error al importar el archivo", "error");
+      setDbStatus('error');
+    }
+  };
 
   const handleAddFuel = () => {
       if(!editingWorker || !newFuelRecord.cost) return;
@@ -1518,7 +1562,7 @@ const App: React.FC = () => {
                )}
             </div>
          )}
-         {view === 'stats' && <StatisticsPanel planning={planning} />}
+         {view === 'stats' && <StatisticsPanel planning={cleanedPlanning} />}
       </div>
 
       {showBackupModal && (
