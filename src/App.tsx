@@ -371,8 +371,6 @@ const App: React.FC = () => {
     workers.forEach((worker, index) => {
       text += `${index + 1}. ${worker.name}\n`;
       text += `   DNI: ${worker.dni}\n`;
-      text += `   CÓDIGO: ${worker.code}\n`;
-      text += `   TELÉFONO: ${worker.phone}\n`;
       text += `   CATEGORÍA: ${worker.role}\n\n`;
     });
 
@@ -2046,7 +2044,7 @@ const App: React.FC = () => {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                            <span className="text-xs font-black text-blue-600">{worker.code}</span>
+                            <Users className="w-5 h-5 text-blue-600" />
                           </div>
                           <div>
                             <p className="font-black text-slate-900">{worker.name}</p>
@@ -2055,7 +2053,6 @@ const App: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <p className="text-xs font-black text-slate-600">{worker.role}</p>
-                          <p className="text-xs text-slate-400">{worker.phone}</p>
                         </div>
                       </div>
                     </div>
