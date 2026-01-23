@@ -153,6 +153,9 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
             </button>
           </div>
 
+          {/* Espacio de separación entre bloques */}
+          <div className="w-8"></div>
+
           {/* Filtro Contrato */}
           <div className="flex gap-1">
             <button

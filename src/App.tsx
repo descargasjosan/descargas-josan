@@ -2582,14 +2582,17 @@ const App: React.FC = () => {
                        const dateObj = new Date(planning.currentDate);
                        const dateStr = dateObj.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
                        
-                       const message = `*AGENDA ${dateStr.toUpperCase()}*\n\nHola ${worker?.name.split(' ')[0]},\n\nTe confirmo tus servicios para el ${dateStr}:\n\n${workerJobs.map(j => {
+                       const message = `Hola ${worker?.name.split(' ')[0]},\n\nServicio para: ${dateStr}\n\n${workerJobs.map(j => {
                           const client = planning.clients.find(c => c.id === j.clientId);
                           const center = client?.centers.find(ct => ct.id === j.centerId);
-                          return `🔹 *${j.startTime} - ${j.endTime}*\n📍 ${client?.name} (${center?.name || 'Sede Principal'})\n📝 ${j.customName || j.type}\n${center?.address ? `🗺️ ${center.address}` : ''}`;
-                       }).join('\n\n')}\n\nPor favor, confirma recepción. ¡Gracias!`;
+                          const address = center?.address || client?.location || '';
+                          const mapUrl = address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '';
+                          
+                          return `   • *Cliente:* ${client?.name}\n   • *Centro:* ${center?.name || 'Sede Principal'}\n   • *Dirección:* ${address}\n   • *Ver en Mapa:* ${mapUrl}\n\n   • *Hora Inicio:* ${j.startTime}\n   • *Tarea:* ${j.customName || j.type}`;
+                       }).join('\n\n')}\n\nPor favor, confirma recepción del mensaje`;
 
                        const encodedMessage = encodeURIComponent(message);
-                       const whatsappUrl = `https://wa.me/${worker?.phone.replace(/\s+/g, '')}?text=${encodedMessage}`;
+                       const whatsappUrl = `https://api.whatsapp.com/send/?phone=34${worker?.phone.replace(/\s+/g, '').replace(/^34/, '')}&text=${encodedMessage}&type=phone_number&app_absent=0`;
 
                        return (
                           <div className="flex-1 flex flex-col h-full">
