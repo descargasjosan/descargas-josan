@@ -150,6 +150,38 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
       totalManHours += duration * workersCount;
     });
 
+    // Lógica para excluir operarios que SOLO tengan "RECONOCIMIENTO MÉDICO" en un día
+    Object.keys(workersPerDay).forEach(date => {
+      const dayJobs = activeJobs.filter(job => job.date === date);
+      const workersThatDay = workersPerDay[date];
+      
+      workersThatDay.forEach(workerId => {
+        const workerJobsThatDay = dayJobs.filter(job => job.assignedWorkerIds.includes(workerId));
+        
+        // Verificar si TODOS los trabajos del operario ese día son de "RECONOCIMIENTO MÉDICO"
+        const onlyMedicalJobs = workerJobsThatDay.every(job => {
+          const client = planning.clients.find(c => c.id === job.clientId);
+          return client?.name === "RECONOCIMIENTO MÉDICO" || client?.name === "RECONOCIMIENTO MEDICO";
+        });
+        
+        // Si solo tiene trabajos de reconocimiento médico, excluirlo del conteo de ese día
+        if (onlyMedicalJobs && workerJobsThatDay.length > 0) {
+          workersPerDay[date].delete(workerId);
+          
+          // También excluirlo del conteo total de uniqueWorkers si no tiene otros trabajos en otras fechas
+          const hasOtherJobs = activeJobs.some(job => 
+            job.assignedWorkerIds.includes(workerId) && 
+            job.date !== date &&
+            !planning.clients.find(c => c.id === job.clientId)?.name?.includes("RECONOCIMIENTO")
+          );
+          
+          if (!hasOtherJobs) {
+            uniqueWorkers.delete(workerId);
+          }
+        }
+      });
+    });
+
     const activeDays = Object.keys(workersPerDay).length;
     let sumDailyWorkers = 0;
     Object.values(workersPerDay).forEach(set => sumDailyWorkers += set.size);
@@ -161,7 +193,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
       totalManHours: totalManHours,
       activeDays
     };
-  }, [activeJobs, selectedWorkerId]);
+  }, [activeJobs, selectedWorkerId, planning.clients]);
 
   const cancellationRate = jobsInScope.length > 0 
     ? ((cancelledJobs.length / jobsInScope.length) * 100).toFixed(1) 

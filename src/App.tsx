@@ -452,9 +452,36 @@ const App: React.FC = () => {
   }, [planning.currentDate, planning.jobs, planning.workers]);
 
   const handleCopyList = (list: Worker[], type: 'altas' | 'bajas') => {
-      const title = type === 'altas' ? `ALTAS ${formatDateDMY(planning.currentDate)}` : `BAJAS ${formatDateDMY(planning.currentDate)}`;
-      const content = list.map(w => `${w.name} - ${w.dni}`).join('\n');
-      navigator.clipboard.writeText(`${title}\n\n${content}`).then(() => showNotification("Copiado al portapapeles", "success"));
+      try {
+        console.log(`Copiando lista ${type}:`, list); // Debug
+        const title = type === 'altas' ? `ALTAS ${formatDateDMY(planning.currentDate)}` : `BAJAS ${formatDateDMY(planning.currentDate)}`;
+        const content = list.map(w => `${w.name} - ${w.dni}`).join('\n');
+        const fullText = `${title}\n\n${content}`;
+        
+        console.log('Texto a copiar:', fullText); // Debug
+        
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(fullText).then(() => {
+            showNotification("Copiado al portapapeles", "success");
+            console.log('Copiado exitoso'); // Debug
+          }).catch((error) => {
+            console.error('Error al copiar:', error); // Debug
+            showNotification("Error al copiar al portapapeles", "error");
+          });
+        } else {
+          // Fallback para navegadores que no soportan clipboard API
+          const textArea = document.createElement('textarea');
+          textArea.value = fullText;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          showNotification("Copiado al portapapeles", "success");
+        }
+      } catch (error) {
+        console.error('Error en handleCopyList:', error);
+        showNotification("Error al copiar la lista", "error");
+      }
   };
 
   const handleAssignWorker = useCallback((workerId: string, jobId: string, sourceJobId: string | null = null) => {
