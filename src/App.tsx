@@ -6,7 +6,7 @@ import {
   ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
   Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles, ChevronLeft, ChevronRight, LayoutGrid,
   Calendar as CalendarIcon, Table, DownloadCloud, CalendarDays, MessageCircle, Copy, TrendingUp,
-  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight
+  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight, StickyNote
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -292,6 +292,11 @@ const App: React.FC = () => {
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const [taskSearch, setTaskSearch] = useState('');
   const [editingDailyNote, setEditingDailyNote] = useState<DailyNote | null>(null);
+  const [workerNoteFilters, setWorkerNoteFilters] = useState<{[key: string]: boolean}>({
+    'info': true,
+    'time': true,
+    'medical': true
+  });
   const [newFuelRecord, setNewFuelRecord] = useState<{liters: string, cost: string, odometer: string, date: string}>({
     liters: '', cost: '', odometer: '', date: new Date().toISOString().split('T')[0]
   });
@@ -2324,6 +2329,91 @@ const App: React.FC = () => {
                   value={editingWorker.notes || ''}
                   onChange={e => setEditingWorker({...editingWorker, notes: e.target.value})}
                />
+            </div>
+
+            <div className="mb-8">
+               <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                     <StickyNote className="w-4 h-4 text-slate-400" />
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Notas de Tareas Diarias</label>
+                  </div>
+                  <div className="flex gap-2">
+                     <button
+                        onClick={() => setWorkerNoteFilters(prev => ({...prev, info: !prev.info}))}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                           workerNoteFilters.info 
+                             ? 'bg-blue-500 text-white' 
+                             : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                        }`}
+                     >
+                        Información
+                     </button>
+                     <button
+                        onClick={() => setWorkerNoteFilters(prev => ({...prev, time: !prev.time}))}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                           workerNoteFilters.time 
+                             ? 'bg-green-500 text-white' 
+                             : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                        }`}
+                     >
+                        Horario
+                     </button>
+                     <button
+                        onClick={() => setWorkerNoteFilters(prev => ({...prev, medical: !prev.medical}))}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${
+                           workerNoteFilters.medical 
+                             ? 'bg-red-500 text-white' 
+                             : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                        }`}
+                     >
+                        Médico
+                     </button>
+                  </div>
+               </div>
+               
+               <div className="bg-slate-50 rounded-xl p-4 max-h-60 overflow-y-auto custom-scrollbar">
+                  {planning.dailyNotes?.filter(note => 
+                     note.workerId === editingWorker.id && 
+                     workerNoteFilters[note.type]
+                  ).length === 0 ? (
+                     <p className="text-center text-[10px] text-slate-400 font-bold py-4">
+                        No hay notas para los filtros seleccionados
+                     </p>
+                  ) : (
+                     <div className="space-y-2">
+                        {planning.dailyNotes
+                           .filter(note => 
+                              note.workerId === editingWorker.id && 
+                              workerNoteFilters[note.type]
+                           )
+                           .sort((a, b) => b.date.localeCompare(a.date))
+                           .map(note => (
+                              <div key={note.id} className="bg-white p-3 rounded-lg border border-slate-200">
+                                 <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                       <span className="text-[9px] font-bold text-slate-500">
+                                          {formatDateDMY(note.date)}
+                                       </span>
+                                       <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${
+                                          note.type === 'info' 
+                                             ? 'bg-blue-100 text-blue-600'
+                                             : note.type === 'time'
+                                             ? 'bg-green-100 text-green-600'
+                                             : 'bg-red-100 text-red-600'
+                                       }`}>
+                                          {note.type === 'info' ? 'Información' : 
+                                           note.type === 'time' ? 'Horario' : 'Médico'}
+                                       </span>
+                                    </div>
+                                 </div>
+                                 <p className="text-[10px] text-slate-700 font-medium leading-relaxed">
+                                    {note.text}
+                                 </p>
+                              </div>
+                           ))}
+                     </div>
+                  )}
+               </div>
             </div>
 
             <div className="flex items-center justify-between pt-6 border-t border-slate-100">
