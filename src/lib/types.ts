@@ -48,6 +48,16 @@ export interface Holiday {
   isLocal: boolean;
 }
 
+export interface Course {
+  id: string;
+  name: string;
+  description?: string;
+  validityMonths?: number; // Meses de validez, por defecto 12
+  assignedWorkerIds: string[]; // Operarios que han realizado el curso
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RegularTask {
   id: string;
   name: string;
@@ -172,7 +182,7 @@ export interface PlanningState {
   jobs: Job[];
   customHolidays: Holiday[];
   notifications: Record<string, string[]>; 
-  availableCourses: string[]; 
+  courses: Course[]; // Nuevo sistema de cursos
   standardTasks: StandardTask[]; 
   dailyNotes: DailyNote[]; 
   fuelRecords: FuelRecord[];

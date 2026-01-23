@@ -16,7 +16,7 @@ import CompactPlanningView from './components/CompactPlanningView';
 import FleetManager from './components/FleetManager'; 
 import LoginScreen from './components/LoginScreen';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS, WORKER_ROLES, MOCK_VEHICLES } from './lib/constants'; 
-import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup } from './lib/types';
+import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course } from './lib/types';
 import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
 import { supabase } from '../supabaseClient';
 
@@ -149,7 +149,7 @@ const App: React.FC = () => {
     jobs: [], // Array vacío - se cargará desde Supabase
     customHolidays: [], 
     notifications: {},
-    availableCourses: AVAILABLE_COURSES,
+    courses: [], // Nuevo sistema de cursos
     standardTasks: [], // Array vacío - se cargará desde Supabase
     dailyNotes: [],
     fuelRecords: [],
@@ -271,7 +271,7 @@ const App: React.FC = () => {
   const [showArchivedWorkers, setShowArchivedWorkers] = useState(false); 
   const [workerAvailabilityFilter, setWorkerAvailabilityFilter] = useState<'all' | 'free' | 'assigned'>('all');
   const [workerContractFilter, setWorkerContractFilter] = useState<'all' | 'fixedDiscontinuous' | 'others'>('all'); 
-  const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'job' | 'worker' | 'client' | 'task', name: string } | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'job' | 'worker' | 'client' | 'task' | 'course', name: string } | null>(null);
   const [confirmDeleteCourse, setConfirmDeleteCourse] = useState<string | null>(null);
 
   const [editingJob, setEditingJob] = useState<Job | null>(null);
@@ -289,6 +289,7 @@ const App: React.FC = () => {
   const [newCourseName, setNewCourseName] = useState('');
   const [dbTab, setDbTab] = useState<'tasks' | 'courses'>('tasks');
   const [editingStandardTask, setEditingStandardTask] = useState<StandardTask | null>(null);
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const [taskSearch, setTaskSearch] = useState('');
   const [editingDailyNote, setEditingDailyNote] = useState<DailyNote | null>(null);
   const [newFuelRecord, setNewFuelRecord] = useState<{liters: string, cost: string, odometer: string, date: string}>({
@@ -694,15 +695,68 @@ const App: React.FC = () => {
 
   const handleAddGlobalCourse = () => {
       if(!newCourseName.trim()) return;
-      if(planning.availableCourses.includes(newCourseName.trim())) { showNotification("Curso ya existe", "warning"); return; }
-      setPlanning(prev => ({...prev, availableCourses: [...prev.availableCourses, newCourseName.trim()]}));
+      const newCourse: Course = {
+        id: `course-${Date.now()}`,
+        name: newCourseName.trim(),
+        description: '',
+        validityMonths: 12,
+        assignedWorkerIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      
+      setPlanning(prev => ({...prev, courses: [...prev.courses, newCourse]}));
       setNewCourseName('');
       showNotification("Curso añadido", "success");
   };
-  const deleteGlobalCourse = (n: string) => {
-      setPlanning(prev => ({...prev, availableCourses: prev.availableCourses.filter(c => c !== n)}));
-      setConfirmDeleteCourse(null);
+  
+  const deleteCourse = (id: string) => {
+      setPlanning(prev => ({...prev, courses: prev.courses.filter(c => c.id !== id)}));
+      setEditingCourse(null);
       showNotification("Curso eliminado", "success");
+  };
+  
+  const saveCourse = (course: Course) => {
+      setPlanning(prev => ({
+        ...prev,
+        courses: prev.courses.map(c => c.id === course.id ? {...course, updatedAt: new Date().toISOString()} : c)
+      }));
+      setEditingCourse(null);
+      showNotification("Curso guardado", "success");
+  };
+  
+  const addWorkerToCourse = (courseId: string, workerId: string) => {
+      setPlanning(prev => ({
+        ...prev,
+        courses: prev.courses.map(c => 
+          c.id === courseId 
+            ? {...c, assignedWorkerIds: [...c.assignedWorkerIds, workerId], updatedAt: new Date().toISOString()}
+            : c
+        )
+      }));
+      showNotification("Operario añadido al curso", "success");
+  };
+  
+  const removeWorkerFromCourse = (courseId: string, workerId: string) => {
+      setPlanning(prev => ({
+        ...prev,
+        courses: prev.courses.map(c => 
+          c.id === courseId 
+            ? {...c, assignedWorkerIds: c.assignedWorkerIds.filter(id => id !== workerId), updatedAt: new Date().toISOString()}
+            : c
+        )
+      }));
+      showNotification("Operario eliminado del curso", "success");
+  };
+  
+  const isCourseExpired = (course: Course, workerId: string) => {
+      // Por ahora, vamos a implementar una lógica simple
+      // En el futuro podríamos añadir fecha de realización por operario
+      return false;
+  };
+  
+  const getWorkerCourses = (workerId: string) => {
+      return planning.courses.filter(course => course.assignedWorkerIds.includes(workerId));
   };
 
   const saveDailyNote = () => {
@@ -728,14 +782,15 @@ const App: React.FC = () => {
       const { id, type } = itemToDelete;
       setPlanning(prev => {
           const newState = { ...prev };
-          if(type === 'job') newState.jobs = prev.jobs.filter(j => j.id !== id);
-          else if(type === 'worker') newState.workers = prev.workers.filter(w => w.id !== id);
-          else if(type === 'client') newState.clients = prev.clients.filter(c => c.id !== id);
-          else if(type === 'task') newState.standardTasks = prev.standardTasks.filter(t => t.id !== id);
+          if(type === 'job') newState.jobs = cleanedPlanning.jobs.filter(j => j.id !== id);
+          else if(type === 'worker') newState.workers = cleanedPlanning.workers.filter(w => w.id !== id);
+          else if(type === 'client') newState.clients = cleanedPlanning.clients.filter(c => c.id !== id);
+          else if(type === 'task') newState.standardTasks = cleanedPlanning.standardTasks.filter(t => t.id !== id);
+          else if(type === 'course') newState.courses = cleanedPlanning.courses.filter(c => c.id !== id);
           return newState;
       });
       setItemToDelete(null);
-      setEditingJob(null); setEditingWorker(null); setEditingClient(null); setEditingStandardTask(null);
+      setEditingJob(null); setEditingWorker(null); setEditingClient(null); setEditingStandardTask(null); setEditingCourse(null);
       showNotification("Eliminado correctamente", "success");
   };
 
@@ -842,33 +897,32 @@ const App: React.FC = () => {
   }, [viewMode, planning.currentDate, rangeStartDate, rangeEndDate]);
 
   // Función para limpiar datos antiguos incompatible con el nuevo formato
-  const cleanupOldData = useCallback((data: PlanningState): PlanningState => {
+  const cleanupOldData = (data: PlanningState): PlanningState => {
     return {
       ...data,
-      // Limpiar tareas estándar antiguas que no tienen el nuevo formato
-      standardTasks: data.standardTasks.filter(task => 
-        task && 
-        task.id && 
-        task.name && 
-        task.defaultWorkers && 
-        task.type && 
-        (task as any).assignedClientIds !== undefined
+      // Limpiar standardTasks - solo mantener los que tienen todos los campos requeridos
+      standardTasks: (data.standardTasks || []).filter(task => 
+        task.id && task.name && task.defaultWorkers && task.type && Array.isArray(task.assignedClientIds)
       ),
-      // Limpiar plantillas rápidas antiguas de clientes
-      clients: data.clients.map(client => ({
+      // Limpiar regularTasks en clientes - solo mantener los que tienen estructura correcta
+      clients: (data.clients || []).map(client => ({
         ...client,
         regularTasks: (client.regularTasks || []).filter(task => 
-          task && 
-          task.id && 
-          task.name && 
-          task.defaultWorkers && 
-          task.category
+          task.id && task.name && task.defaultWorkers && task.category
         )
-      }))
+      })),
+      // Limpiar courses - solo mantener los que tienen estructura correcta
+      courses: (data.courses || []).filter(course => 
+        course.id && course.name && Array.isArray(course.assignedWorkerIds)
+      ),
+      // Asegurar que los arrays críticos existan
+      workers: data.workers || [],
+      jobs: data.jobs || [],
+      vehicles: data.vehicles || [],
+      vehicleAssignments: data.vehicleAssignments || []
     };
-  }, []);
+  };
 
-  // Aplicar limpieza cuando los datos cambian
   const cleanedPlanning = useMemo(() => cleanupOldData(planning), [planning, cleanupOldData]);
 
   const filteredWorkersTable = useMemo(() => {
@@ -1554,10 +1608,93 @@ const App: React.FC = () => {
                )}
                {dbTab === 'courses' && (
                  <div>
-                    <div className="flex gap-2 mb-4"><input className="p-2 rounded-xl border" placeholder="Nuevo curso" value={newCourseName} onChange={e=>setNewCourseName(e.target.value)} /><button onClick={handleAddGlobalCourse} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold text-xs">Añadir</button></div>
-                    {planning.availableCourses.map(c => (
-                      <div key={c} className="flex justify-between items-center bg-white p-3 mb-2 rounded-xl border border-slate-200 font-bold text-sm"><span>{c}</span><button onClick={()=>setConfirmDeleteCourse(c)} className="text-red-500"><Trash2 className="w-4 h-4"/></button></div>
-                    ))}
+                    <div className="flex gap-2 mb-4">
+                      <input 
+                        className="p-2 rounded-xl border" 
+                        placeholder="Nuevo curso" 
+                        value={newCourseName} 
+                        onChange={e=>setNewCourseName(e.target.value)} 
+                      />
+                      <button 
+                        onClick={handleAddGlobalCourse} 
+                        className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold text-xs"
+                      >
+                        Añadir
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      {planning.courses.map(course => (
+                        <div key={course.id} className="bg-white p-4 rounded-xl border border-slate-200">
+                          <div className="flex justify-between items-start mb-3">
+                            <div className="flex-1">
+                              <h3 className="font-bold text-lg text-slate-900">{course.name}</h3>
+                              {course.description && (
+                                <p className="text-sm text-slate-600 mt-1">{course.description}</p>
+                              )}
+                              <div className="flex items-center gap-4 mt-2">
+                                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-lg">
+                                  Validez: {course.validityMonths || 12} meses
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  {course.assignedWorkerIds.length} operarios asignados
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setEditingCourse(course)}
+                                className="p-2 hover:bg-blue-50 rounded-lg transition-colors text-blue-600"
+                                title="Editar curso"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setItemToDelete({ id: course.id, type: 'course', name: course.name })}
+                                className="p-2 hover:bg-red-50 rounded-lg transition-colors text-red-500"
+                                title="Eliminar curso"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                          
+                          {/* Operarios asignados */}
+                          <div className="border-t pt-3">
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-xs font-bold text-slate-700 uppercase">Operarios con este curso</span>
+                              <button
+                                onClick={() => setEditingCourse(course)}
+                                className="text-xs bg-blue-600 text-white px-2 py-1 rounded-lg hover:bg-blue-700"
+                              >
+                                Gestionar
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {course.assignedWorkerIds.length > 0 ? (
+                                course.assignedWorkerIds.map(workerId => {
+                                  const worker = planning.workers.find(w => w.id === workerId);
+                                  return worker ? (
+                                    <span key={workerId} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-lg">
+                                      {worker.name}
+                                    </span>
+                                  ) : null;
+                                })
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">No hay operarios asignados</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {planning.courses.length === 0 && (
+                        <div className="text-center py-8 text-slate-400">
+                          <GraduationCap className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                          <p className="font-bold uppercase text-xs tracking-widest">No hay cursos registrados</p>
+                        </div>
+                      )}
+                    </div>
                  </div>
                )}
             </div>
@@ -2094,21 +2231,21 @@ const App: React.FC = () => {
                 <h3 className="font-black text-blue-900 uppercase tracking-widest text-xs">Formación y Cursos</h3>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {planning.availableCourses.map(course => (
-                  <label key={course} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-blue-100 cursor-pointer hover:border-blue-300 transition-all">
+                {planning.courses.map(course => (
+                  <label key={course.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-blue-100 cursor-pointer hover:border-blue-300 transition-all">
                     <input 
                       type="checkbox" 
                       className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
-                      checked={editingWorker.completedCourses?.includes(course)}
+                      checked={editingWorker.completedCourses?.includes(course.name)}
                       onChange={e => {
                         const current = editingWorker.completedCourses || [];
                         const updated = e.target.checked 
-                          ? [...current, course]
-                          : current.filter(c => c !== course);
+                          ? [...current, course.name]
+                          : current.filter(c => c !== course.name);
                         setEditingWorker({...editingWorker, completedCourses: updated});
                       }}
                     />
-                    <span className="text-[10px] font-bold text-slate-600 uppercase leading-tight">{course}</span>
+                    <span className="text-[10px] font-bold text-slate-600 uppercase leading-tight">{course.name}</span>
                   </label>
                 ))}
               </div>
@@ -2283,19 +2420,19 @@ const App: React.FC = () => {
                         <h3 className="font-black text-slate-900 uppercase tracking-widest text-xs">Formación Requerida</h3>
                     </div>
                     <div className="bg-purple-50/50 rounded-2xl p-4 border border-purple-100 grid grid-cols-1 gap-2">
-                        {planning.availableCourses.map(course => (
-                            <label key={course} className="flex items-center gap-3 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
+                        {planning.courses.map(course => (
+                            <label key={course.id} className="flex items-center gap-3 p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
                                 <input 
                                     type="checkbox" 
                                     className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 border-gray-300"
-                                    checked={editingClient.requiredCourses.includes(course)}
+                                    checked={editingClient.requiredCourses.includes(course.name)}
                                     onChange={e => {
                                         const current = editingClient.requiredCourses || [];
-                                        const updated = e.target.checked ? [...current, course] : current.filter(c => c !== course);
+                                        const updated = e.target.checked ? [...current, course.name] : current.filter(c => c !== course.name);
                                         setEditingClient({...editingClient, requiredCourses: updated});
                                     }}
                                 />
-                                <span className="text-[10px] font-bold text-slate-600 uppercase">{course}</span>
+                                <span className="text-[10px] font-bold text-slate-600 uppercase">{course.name}</span>
                             </label>
                         ))}
                     </div>
@@ -2754,6 +2891,160 @@ const App: React.FC = () => {
               className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-black text-[10px] uppercase tracking-wider hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {editingStandardTask.id.startsWith('st-') ? 'Crear' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* MODAL DE EDICIÓN DE CURSOS */}
+    {editingCourse && (
+      <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-2xl rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-black text-slate-900 italic uppercase">Editar Curso</h2>
+            <button
+              onClick={() => setEditingCourse(null)}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+            >
+              <X className="w-6 h-6 text-slate-400" />
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {/* Información básica */}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-bold text-slate-700 uppercase tracking-wider">Nombre del Curso</label>
+                <input
+                  type="text"
+                  className="w-full mt-2 p-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                  value={editingCourse.name}
+                  onChange={(e) => setEditingCourse({...editingCourse, name: e.target.value})}
+                  placeholder="Nombre del curso"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-bold text-slate-700 uppercase tracking-wider">Descripción</label>
+                <textarea
+                  className="w-full mt-2 p-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none resize-none"
+                  rows={3}
+                  value={editingCourse.description || ''}
+                  onChange={(e) => setEditingCourse({...editingCourse, description: e.target.value})}
+                  placeholder="Descripción del curso (opcional)"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-bold text-slate-700 uppercase tracking-wider">Validez (meses)</label>
+                <input
+                  type="number"
+                  className="w-full mt-2 p-3 border border-slate-200 rounded-xl focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                  value={editingCourse.validityMonths || 12}
+                  onChange={(e) => setEditingCourse({...editingCourse, validityMonths: parseInt(e.target.value) || 12})}
+                  min="1"
+                  max="120"
+                />
+                <p className="text-xs text-slate-500 mt-1">Tiempo en meses que el curso mantiene su validez</p>
+              </div>
+            </div>
+
+            {/* Asignación de operarios */}
+            <div className="space-y-4">
+              <label className="text-sm font-bold text-slate-700 uppercase tracking-wider">Operarios Asignados</label>
+              <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 max-h-60 overflow-y-auto">
+                <div className="space-y-2">
+                  {planning.workers
+                    .filter(w => !w.isArchived)
+                    .map(worker => {
+                      const isAssigned = editingCourse.assignedWorkerIds.includes(worker.id);
+                      return (
+                        <label key={worker.id} className="flex items-center gap-3 p-3 bg-white rounded-lg border border-slate-100 cursor-pointer hover:bg-blue-50 transition-colors">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                            checked={isAssigned}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setEditingCourse({
+                                  ...editingCourse,
+                                  assignedWorkerIds: [...editingCourse.assignedWorkerIds, worker.id]
+                                });
+                              } else {
+                                setEditingCourse({
+                                  ...editingCourse,
+                                  assignedWorkerIds: editingCourse.assignedWorkerIds.filter(id => id !== worker.id)
+                                });
+                              }
+                            }}
+                          />
+                          <div className="flex-1">
+                            <p className="font-bold text-sm text-slate-900">{worker.name}</p>
+                            <p className="text-xs text-slate-500">{worker.code} • {worker.contract}</p>
+                          </div>
+                          {isAssigned && (
+                            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-lg">
+                              Asignado
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">
+                {editingCourse.assignedWorkerIds.length} operarios seleccionados
+              </p>
+            </div>
+          </div>
+
+          {/* Botones de acción */}
+          <div className="flex gap-3 mt-8 pt-6 border-t border-slate-100">
+            <button
+              onClick={() => setEditingCourse(null)}
+              className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => saveCourse(editingCourse)}
+              disabled={!editingCourse.name.trim()}
+              className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Guardar Curso
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN */}
+    {itemToDelete && (
+      <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="w-8 h-8 text-red-600" />
+            </div>
+            <h2 className="text-xl font-black text-slate-900 mb-2">Confirmar Eliminación</h2>
+            <p className="text-sm text-slate-600">
+              ¿Estás seguro de que deseas eliminar {itemToDelete.name}? Esta acción no se puede deshacer.
+            </p>
+          </div>
+          
+          <div className="flex gap-3">
+            <button
+              onClick={() => setItemToDelete(null)}
+              className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-lg font-black text-sm hover:bg-slate-200 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={executeDelete}
+              className="flex-1 py-3 bg-red-600 text-white rounded-lg font-black text-sm hover:bg-red-700 transition-colors"
+            >
+              Eliminar
             </button>
           </div>
         </div>
