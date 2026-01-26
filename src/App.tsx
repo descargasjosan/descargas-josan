@@ -440,12 +440,32 @@ const App: React.FC = () => {
       const targetWorkers = planning.workers.filter(w => w.contractType === ContractType.FIJO_DISCONTINUO);
       const safeJobs = planning.jobs || [];
       
+      // Función para verificar si un trabajador tiene tareas reales (excluyendo RECONOCIMIENTO MÉDICO)
+      const hasRealJobs = (date: string, workerId: string) => {
+        const workerJobs = safeJobs.filter(j => 
+          j.date === date && 
+          !j.isCancelled && 
+          j.assignedWorkerIds.includes(workerId)
+        );
+        
+        // Si no tiene tareas, return false
+        if (workerJobs.length === 0) return false;
+        
+        // Verificar si AL MENOS UNA tarea es de un cliente diferente a RECONOCIMIENTO MÉDICO
+        return workerJobs.some(job => {
+          const client = planning.clients.find(c => c.id === job.clientId);
+          return client && !client.name.includes('RECONOCIMIENTO MÉDICO') && !client.name.includes('RECONOCIMIENTO MEDICO');
+        });
+      };
+      
+      // Obtener IDs de trabajadores con tareas reales en día anterior
       const workedPrevDayIds = new Set(
-        safeJobs.filter(j => j.date === prevWorkingDayStr && !j.isCancelled).flatMap(j => j.assignedWorkerIds || [])
+        targetWorkers.filter(w => hasRealJobs(prevWorkingDayStr, w.id)).map(w => w.id)
       );
       
+      // Obtener IDs de trabajadores con tareas reales hoy
       const worksTodayIds = new Set(
-        safeJobs.filter(j => j.date === todayStr && !j.isCancelled).flatMap(j => j.assignedWorkerIds || [])
+        targetWorkers.filter(w => hasRealJobs(todayStr, w.id)).map(w => w.id)
       );
       
       const altas = targetWorkers.filter(w => worksTodayIds.has(w.id) && !workedPrevDayIds.has(w.id));
@@ -454,7 +474,7 @@ const App: React.FC = () => {
     } catch (e) {
       return { altas: [], bajas: [], prevDate: planning.currentDate };
     }
-  }, [planning.currentDate, planning.jobs, planning.workers]);
+  }, [planning.currentDate, planning.jobs, planning.workers, planning.clients]);
 
   const handleCopyList = (list: Worker[], type: 'altas' | 'bajas') => {
       try {
@@ -1577,7 +1597,7 @@ const App: React.FC = () => {
                <button onClick={handleOpenNewClientHandler} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Cliente</button>
              </div>
              <div className="grid grid-cols-4 gap-4">
-               {planning.clients.map(c => (
+               {planning.clients.sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                  <div key={c.id} onClick={() => setEditingClient(c)} className="bg-white p-4 rounded-2xl border border-slate-100 hover:shadow-md transition-all cursor-pointer">
                     <h3 className="font-black text-slate-900">{c.name}</h3>
                     <p className="text-xs text-slate-400 uppercase font-bold">{c.location}</p>
@@ -1866,7 +1886,7 @@ const App: React.FC = () => {
                              }}
                           >
                              <option value="">Seleccionar Cliente</option>
-                             {planning.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                             {planning.clients.sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                           </select>
                           <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                        </div>
@@ -2963,7 +2983,7 @@ const App: React.FC = () => {
               <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Asignar a Clientes</label>
               <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 max-h-32 overflow-y-auto custom-scrollbar">
                 <div className="grid grid-cols-2 gap-2">
-                  {planning.clients.map(client => (
+                  {planning.clients.sort((a, b) => a.name.localeCompare(b.name)).map(client => (
                     <label key={client.id} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1.5 rounded transition-colors">
                       <input
                         type="checkbox"
