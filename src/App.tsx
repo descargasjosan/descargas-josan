@@ -262,6 +262,42 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, [planning]); 
 
+  // useEffect para actualizar automáticamente estados de operarios
+  useEffect(() => {
+    if (!planning.workers.length) return;
+
+    const today = new Date().toISOString().split('T')[0];
+    const workersNeedingUpdate = planning.workers.filter(worker => 
+      worker.status !== WorkerStatus.DISPONIBLE && 
+      worker.statusEndDate && 
+      worker.statusEndDate < today
+    );
+
+    if (workersNeedingUpdate.length > 0) {
+      setPlanning(prev => ({
+        ...prev,
+        workers: prev.workers.map(worker => {
+          if (workersNeedingUpdate.some(w => w.id === worker.id)) {
+            return {
+              ...worker,
+              status: WorkerStatus.DISPONIBLE,
+              statusStartDate: undefined,
+              statusEndDate: undefined
+            };
+          }
+          return worker;
+        })
+      }));
+
+      // Mostrar notificación sobre los cambios automáticos
+      const workerNames = workersNeedingUpdate.map(w => w.name).join(', ');
+      showNotification(
+        `${workersNeedingUpdate.length} operario(s) cambiado(s) a Disponible automáticamente: ${workerNames}`,
+        'info'
+      );
+    }
+  }, [planning.currentDate, planning.workers]); 
+
 
   const backupInputRef = useRef<HTMLInputElement>(null);
   const [draggedWorkerId, setDraggedWorkerId] = useState<string | null>(null);
@@ -270,7 +306,13 @@ const App: React.FC = () => {
   const [workerTableSearch, setWorkerTableSearch] = useState('');
   const [showArchivedWorkers, setShowArchivedWorkers] = useState(false); 
   const [workerAvailabilityFilter, setWorkerAvailabilityFilter] = useState<'all' | 'free' | 'assigned'>('all');
-  const [workerContractFilter, setWorkerContractFilter] = useState<'all' | 'fixedDiscontinuous' | 'others'>('all'); 
+  const [workerContractFilter, setWorkerContractFilter] = useState<'all' | 'fixedDiscontinuous' | 'others'>('all');
+  const [workerStatusFilter, setWorkerStatusFilter] = useState<{[key: string]: boolean}>({
+  'DISPONIBLE': true,
+  'VACACIONES': true,
+  'BAJA_MEDICA': true,
+  'BAJA_PATERNIDAD': true
+}); 
   const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'job' | 'worker' | 'client' | 'task' | 'course', name: string } | null>(null);
   const [confirmDeleteCourse, setConfirmDeleteCourse] = useState<string | null>(null);
 
@@ -999,13 +1041,31 @@ const App: React.FC = () => {
   if (workerContractFilter !== 'all') {
     if (workerContractFilter === 'fixedDiscontinuous') {
       workers = workers.filter(w => w.contractType === ContractType.FIJO_DISCONTINUO);
-    } else if (workerContractFilter === 'others') {
+    } else {
       workers = workers.filter(w => w.contractType !== ContractType.FIJO_DISCONTINUO);
     }
   }
   
+  // Filtrar por estado (múltiples estados)
+  const activeStatusFilters = Object.keys(workerStatusFilter).filter(key => workerStatusFilter[key]);
+  if (activeStatusFilters.length > 0) {
+    workers = workers.filter(w => {
+      // Mapear las claves del filtro a los valores del enum
+      const statusMapping: {[key: string]: string} = {
+        'DISPONIBLE': 'Disponible',
+        'VACACIONES': 'Vacaciones',
+        'BAJA_MEDICA': 'Baja Médica',
+        'BAJA_PATERNIDAD': 'Baja Paternidad'
+      };
+      return activeStatusFilters.some(filterKey => w.status === statusMapping[filterKey]);
+    });
+  } else {
+    // Si no hay ningún filtro activo, no mostrar ningún operario
+    workers = [];
+  }
+  
   return workers;
-}, [cleanedPlanning.workers, workerTableSearch, showArchivedWorkers, workerAvailabilityFilter, workerContractFilter, cleanedPlanning.jobs, cleanedPlanning.currentDate]);
+}, [cleanedPlanning.workers, workerTableSearch, showArchivedWorkers, workerAvailabilityFilter, workerContractFilter, workerStatusFilter, cleanedPlanning.jobs, cleanedPlanning.currentDate]);
   // Función para obtener las plantillas rápidas de un cliente (combinando regularTasks + standardTasks asignadas)
   const getClientQuickTemplates = (clientId: string) => {
     const client = cleanedPlanning.clients.find(c => c.id === clientId);
@@ -1512,6 +1572,128 @@ const App: React.FC = () => {
                         Resto
                       </button>
                     </div>
+                  </div>
+
+                  {/* Filtro de Estado */}
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Estado</span>
+                    <button
+                      onClick={() => {
+                        const allActive = Object.values(workerStatusFilter).every(v => v);
+                        if (allActive) {
+                          // Si todos están activos, desactivar todos
+                          setWorkerStatusFilter({
+                            'DISPONIBLE': false,
+                            'VACACIONES': false,
+                            'BAJA_MEDICA': false,
+                            'BAJA_PATERNIDAD': false
+                          });
+                        } else {
+                          // Si no todos están activos, activar todos
+                          setWorkerStatusFilter({
+                            'DISPONIBLE': true,
+                            'VACACIONES': true,
+                            'BAJA_MEDICA': true,
+                            'BAJA_PATERNIDAD': true
+                          });
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                        Object.values(workerStatusFilter).every(v => v) 
+                          ? 'bg-slate-900 text-white shadow-sm' 
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Todos
+                    </button>
+                    <button
+                      onClick={() => {
+                        const allActive = Object.values(workerStatusFilter).every(v => v);
+                        setWorkerStatusFilter((prev: Record<string, boolean>) => ({
+                          ...prev, 
+                          'DISPONIBLE': !prev['DISPONIBLE'],
+                          // Si todos estaban activos, desactivar los demás al cambiar este
+                          ...(allActive ? {
+                            'VACACIONES': false,
+                            'BAJA_MEDICA': false,
+                            'BAJA_PATERNIDAD': false
+                          } : {})
+                        }));
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                        workerStatusFilter['DISPONIBLE'] 
+                          ? 'bg-green-500 text-white shadow-sm' 
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Disponible
+                    </button>
+                    <button
+                      onClick={() => {
+                        const allActive = Object.values(workerStatusFilter).every(v => v);
+                        setWorkerStatusFilter((prev: Record<string, boolean>) => ({
+                          ...prev, 
+                          'VACACIONES': !prev['VACACIONES'],
+                          // Si todos estaban activos, desactivar los demás al cambiar este
+                          ...(allActive ? {
+                            'DISPONIBLE': false,
+                            'BAJA_MEDICA': false,
+                            'BAJA_PATERNIDAD': false
+                          } : {})
+                        }));
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                        workerStatusFilter['VACACIONES'] 
+                          ? 'bg-amber-500 text-white shadow-sm' 
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Vacaciones
+                    </button>
+                    <button
+                      onClick={() => {
+                        const allActive = Object.values(workerStatusFilter).every(v => v);
+                        setWorkerStatusFilter((prev: Record<string, boolean>) => ({
+                          ...prev, 
+                          'BAJA_MEDICA': !prev['BAJA_MEDICA'],
+                          // Si todos estaban activos, desactivar los demás al cambiar este
+                          ...(allActive ? {
+                            'DISPONIBLE': false,
+                            'VACACIONES': false,
+                            'BAJA_PATERNIDAD': false
+                          } : {})
+                        }));
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                        workerStatusFilter['BAJA_MEDICA'] 
+                          ? 'bg-red-500 text-white shadow-sm' 
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Baja Médica
+                    </button>
+                    <button
+                      onClick={() => {
+                        const allActive = Object.values(workerStatusFilter).every(v => v);
+                        setWorkerStatusFilter((prev: Record<string, boolean>) => ({
+                          ...prev, 
+                          'BAJA_PATERNIDAD': !prev['BAJA_PATERNIDAD'],
+                          // Si todos estaban activos, desactivar los demás al cambiar este
+                          ...(allActive ? {
+                            'DISPONIBLE': false,
+                            'VACACIONES': false,
+                            'BAJA_MEDICA': false
+                          } : {})
+                        }));
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                        workerStatusFilter['BAJA_PATERNIDAD'] 
+                          ? 'bg-purple-500 text-white shadow-sm' 
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      Baja Paternidad
+                    </button>
                   </div>
 
                   {/* Filtro de Archivados */}
