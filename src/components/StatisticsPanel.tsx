@@ -2,10 +2,10 @@
 import React, { useState, useMemo } from 'react';
 import { 
   BarChart3, Users, Clock, CalendarDays, Filter, Building2, MapPin, 
-  TrendingUp, Activity, Calculator, ArrowRight, Ban, X, FileText, AlertCircle, Download, FileSpreadsheet, User, Briefcase, CheckCircle2, Stethoscope, StickyNote
+  TrendingUp, Activity, Calculator, ArrowRight, Ban, X, FileText, AlertCircle, Download, FileSpreadsheet, User, Briefcase, CheckCircle2, Stethoscope, StickyNote, Fuel
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PlanningState, Job, Worker, NoteType } from '../lib/types';
+import { PlanningState, Job, Worker, NoteType, FuelRecord } from '../lib/types';
 import { formatDateDMY } from '../lib/utils';
 
 interface StatisticsPanelProps {
@@ -25,6 +25,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('all'); 
   
   const [showCancelledDetails, setShowCancelledDetails] = useState(false);
+  const [showFuelDetails, setShowFuelDetails] = useState(false);
 
   const sortedWorkers = useMemo(() => {
     return [...planning.workers]
@@ -44,6 +45,14 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
 
   const activeJobs = useMemo(() => jobsInScope.filter(j => !j.isCancelled), [jobsInScope]);
   const cancelledJobs = useMemo(() => jobsInScope.filter(j => j.isCancelled), [jobsInScope]);
+
+  const fuelRecordsInScope = useMemo(() => {
+    return planning.fuelRecords.filter(record => {
+      if (record.date < startDate || record.date > endDate) return false;
+      if (selectedWorkerId !== 'all' && record.workerId !== selectedWorkerId) return false;
+      return true;
+    });
+  }, [planning.fuelRecords, startDate, endDate, selectedWorkerId]);
 
   const flattenedActivity = useMemo(() => {
     const activity: Array<{
@@ -380,95 +389,129 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
          </div>
       </div>
 
-      <div className="p-8">
+      <div className="p-2">
         
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-10">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 mb-2">
            
-           <div onClick={() => setShowCancelledDetails(false)} className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${!showCancelledDetails && selectedWorkerId === 'all' ? 'border-blue-200 ring-4 ring-blue-50' : 'border-slate-100'}`}>
+           <div onClick={() => {setShowCancelledDetails(false); setShowFuelDetails(false);}} className={`bg-white rounded-[12px] p-2 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${!showCancelledDetails && !showFuelDetails && selectedWorkerId === 'all' ? 'border-blue-200 ring-2 ring-blue-50' : 'border-slate-100'}`}>
               <div className="absolute right-0 top-0 w-32 h-32 bg-blue-50 rounded-full -mr-10 -mt-10 group-hover:bg-blue-100 transition-colors" />
-              <div className="relative z-10">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-blue-600 shadow-sm mb-4">
-                  {selectedWorkerId === 'all' ? <Users className="w-6 h-6" /> : <CalendarDays className="w-6 h-6" />}
+              <div className="relative z-10 flex items-start justify-between">
+                <div className="flex-1">
+                  {selectedWorkerId === 'all' ? (
+                      <>
+                          <h3 className="text-2xl font-[900] text-slate-900 mb-1">{stats.totalUniqueWorkers}</h3>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operarios Totales</p>
+                      </>
+                  ) : (
+                      <>
+                          <h3 className="text-2xl font-[900] text-slate-900 mb-1">{stats.activeDays}</h3>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Días Trabajados</p>
+                      </>
+                  )}
                 </div>
-                {selectedWorkerId === 'all' ? (
-                    <>
-                        <h3 className="text-4xl font-[900] text-slate-900 mb-1">{stats.totalUniqueWorkers}</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operarios Totales</p>
-                    </>
-                ) : (
-                    <>
-                        <h3 className="text-4xl font-[900] text-slate-900 mb-1">{stats.activeDays}</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Días Trabajados</p>
-                    </>
-                )}
-                <div className="mt-4 flex items-center gap-2">
-                   <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">
-                       {selectedWorkerId === 'all' ? 'Recuento Único' : 'En periodo'}
-                   </span>
+                <div className="w-8 h-8 bg-white rounded-xl flex items-center justify-center text-blue-600 shadow-sm">
+                  {selectedWorkerId === 'all' ? <Users className="w-4 h-4" /> : <CalendarDays className="w-4 h-4" />}
                 </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                 <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">
+                     {selectedWorkerId === 'all' ? 'Recuento Único' : 'En periodo'}
+                 </span>
               </div>
            </div>
 
-           <div className="bg-white rounded-[32px] p-6 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
+           <div className="bg-white rounded-[12px] p-2 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
               <div className="absolute right-0 top-0 w-32 h-32 bg-purple-50 rounded-full -mr-10 -mt-10 group-hover:bg-purple-100 transition-colors" />
-              <div className="relative z-10">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-purple-600 shadow-sm mb-4">
-                  <Activity className="w-6 h-6" />
+              <div className="relative z-10 flex items-start justify-between">
+                <div className="flex-1">
+                  {selectedWorkerId === 'all' ? (
+                      <>
+                          <h3 className="text-2xl font-[900] text-slate-900 mb-1">
+                          {stats.averageDailyWorkers.toLocaleString('es-ES', { maximumFractionDigits: 1 })}
+                          </h3>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Media Empleados/Día</p>
+                      </>
+                  ) : (
+                      <>
+                          <h3 className="text-2xl font-[900] text-slate-900 mb-1">
+                              {activeJobs.length}
+                          </h3>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Servicios Totales</p>
+                      </>
+                  )}
                 </div>
-                {selectedWorkerId === 'all' ? (
-                    <>
-                        <h3 className="text-4xl font-[900] text-slate-900 mb-1">
-                        {stats.averageDailyWorkers.toLocaleString('es-ES', { maximumFractionDigits: 1 })}
-                        </h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Media Empleados/Día</p>
-                    </>
-                ) : (
-                    <>
-                        <h3 className="text-4xl font-[900] text-slate-900 mb-1">
-                            {activeJobs.length}
-                        </h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Servicios Totales</p>
-                    </>
-                )}
-                <div className="mt-4 flex items-center gap-2">
-                   <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">
-                       {selectedWorkerId === 'all' ? `Base: ${stats.activeDays} días` : 'Asignados'}
-                   </span>
+                <div className="w-8 h-8 bg-white rounded-xl flex items-center justify-center text-purple-600 shadow-sm">
+                  <Activity className="w-4 h-4" />
                 </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                 <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">
+                     {selectedWorkerId === 'all' ? `Base: ${stats.activeDays} días` : 'Asignados'}
+                 </span>
               </div>
            </div>
 
-           <div className="bg-white rounded-[32px] p-6 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
+           <div className="bg-white rounded-[12px] p-2 border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300">
               <div className="absolute right-0 top-0 w-32 h-32 bg-emerald-50 rounded-full -mr-10 -mt-10 group-hover:bg-emerald-100 transition-colors" />
-              <div className="relative z-10">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm mb-4">
-                  <Clock className="w-6 h-6" />
+              <div className="relative z-10 flex items-start justify-between">
+                <div className="flex-1">
+                  <h3 className="text-2xl font-[900] text-slate-900 mb-1">
+                    {stats.totalManHours.toLocaleString('es-ES', { maximumFractionDigits: 2 })} h
+                  </h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Horas {selectedWorkerId === 'all' ? 'Globales' : 'Trabajador'}</p>
                 </div>
-                <h3 className="text-4xl font-[900] text-slate-900 mb-1">
-                  {stats.totalManHours.toLocaleString('es-ES', { maximumFractionDigits: 2 })} h
-                </h3>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Horas {selectedWorkerId === 'all' ? 'Globales' : 'Trabajador'}</p>
-                <div className="mt-4 flex items-center gap-2">
-                   <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Realizadas</span>
+                <div className="w-8 h-8 bg-white rounded-xl flex items-center justify-center text-emerald-600 shadow-sm">
+                  <Clock className="w-4 h-4" />
                 </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                 <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Realizadas</span>
               </div>
            </div>
 
-           <div onClick={() => setShowCancelledDetails(!showCancelledDetails)} className={`bg-white rounded-[32px] p-6 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${showCancelledDetails ? 'border-red-300 ring-4 ring-red-50' : 'border-slate-100'}`}>
+           <div onClick={() => {setShowCancelledDetails(!showCancelledDetails); setShowFuelDetails(false);}} className={`bg-white rounded-[12px] p-2 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-300 cursor-pointer ${showCancelledDetails ? 'border-red-300 ring-2 ring-red-50' : 'border-slate-100'}`}>
               <div className="absolute right-0 top-0 w-32 h-32 bg-red-50 rounded-full -mr-10 -mt-10 group-hover:bg-red-100 transition-colors" />
-              <div className="relative z-10">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm mb-4 transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-white text-red-600'}`}>
-                  {showCancelledDetails ? <X className="w-6 h-6" /> : <Ban className="w-6 h-6" />}
+              <div className="relative z-10 flex items-start justify-between">
+                <div className="flex-1">
+                  <h3 className="text-2xl font-[900] text-slate-900 mb-1">
+                    {cancelledJobs.length}
+                  </h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Servicios Anulados</p>
                 </div>
-                <h3 className="text-4xl font-[900] text-slate-900 mb-1">
-                  {cancelledJobs.length}
-                </h3>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Servicios Anulados</p>
-                <div className="mt-4 flex items-center gap-2">
-                   <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700'}`}>
-                      {showCancelledDetails ? 'Ver Detalle' : `Tasa: ${cancellationRate}%`}
-                   </span>
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shadow-sm transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-white text-red-600'}`}>
+                  {showCancelledDetails ? <X className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
                 </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                 <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${showCancelledDetails ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700'}`}>
+                    {showCancelledDetails ? 'Ver Detalle' : `Tasa: ${cancellationRate}%`}
+                 </span>
+              </div>
+           </div>
+
+           <div onClick={() => {setShowFuelDetails(!showFuelDetails); setShowCancelledDetails(false);}} className={`bg-white rounded-[12px] p-2 border shadow-sm relative overflow-hidden group hover:shadow-xl hover:scale-[1.02] transition-all duration-150 cursor-pointer ${showFuelDetails ? 'border-amber-300 ring-2 ring-amber-50' : 'border-slate-100'}`}>
+              <div className="absolute right-0 top-0 w-32 h-32 bg-amber-50 rounded-full -mr-10 -mt-10 group-hover:bg-amber-100 transition-colors" />
+              <div className="relative z-10 flex items-start justify-between">
+                <div className="flex-1">
+                  <h3 className="text-2xl font-[900] text-slate-900 mb-1">
+                    {fuelRecordsInScope.length}
+                  </h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Repostajes</p>
+                  <div className="mt-1">
+                    <h4 className="text-lg font-[900] text-amber-600">
+                      {fuelRecordsInScope.reduce((sum, record) => sum + record.cost, 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                    </h4>
+                    <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest">Total Gasto Combustible</p>
+                  </div>
+                </div>
+                <div className="w-8 h-8 bg-white rounded-xl flex items-center justify-center text-amber-600 shadow-sm">
+                  <Fuel className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                 <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-colors ${showFuelDetails ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-700'}`}>
+                    {showFuelDetails ? 'Ver Detalle' : `${fuelRecordsInScope.length} registros`}
+                 </span>
               </div>
            </div>
 
@@ -561,6 +604,7 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
               </div>
            </div>
         ) : (
+            !showCancelledDetails && !showFuelDetails && (
             <div className="bg-white rounded-[32px] border border-blue-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
                 <div className="p-8 border-b border-blue-50 bg-blue-50/30 flex items-center justify-between">
                     <div className="flex items-center gap-4">
@@ -697,7 +741,75 @@ const StatisticsPanel: React.FC<StatisticsPanelProps> = ({ planning }) => {
                     </table>
                 </div>
             </div>
+            )
         )}
+
+        {showFuelDetails ? (
+           <div className="bg-white rounded-[32px] border border-amber-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-200">
+              <div className="p-8 border-b border-amber-50 bg-amber-50/30 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                   <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-600">
+                      <Fuel className="w-6 h-6" />
+                   </div>
+                   <div>
+                      <h3 className="text-lg font-black text-amber-900 uppercase italic">Registro de Repostajes</h3>
+                      <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Detalle de combustible en el periodo</p>
+                   </div>
+                </div>
+                <button onClick={() => setShowFuelDetails(false)} className="p-2 hover:bg-amber-100 rounded-xl text-amber-400 hover:text-amber-700 transition-colors">
+                   <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                 <table className="w-full text-left">
+                    <thead>
+                       <tr className="bg-amber-50/50 border-b border-amber-100">
+                          <th className="px-6 py-4 text-[10px] font-black text-amber-400 uppercase tracking-widest">Fecha</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-amber-400 uppercase tracking-widest">Operario</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-amber-400 uppercase tracking-widest">Litros</th>
+                          <th className="px-6 py-4 text-[10px] font-black text-amber-400 uppercase tracking-widest">Coste</th>
+                       </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-50">
+                       {fuelRecordsInScope.length > 0 ? (
+                          fuelRecordsInScope.map(record => {
+                             const worker = planning.workers.find(w => w.id === record.workerId);
+                             return (
+                                <tr key={record.id} className="hover:bg-amber-50/30 transition-colors">
+                                   <td className="px-6 py-4">
+                                      <p className="text-xs font-black text-slate-900">{formatDateDMY(record.date)}</p>
+                                   </td>
+                                   <td className="px-6 py-4">
+                                      <p className="text-xs font-black text-slate-900">{worker?.name || 'Desconocido'}</p>
+                                      <p className="text-[9px] font-bold text-slate-400 uppercase">{worker?.code || 'N/A'}</p>
+                                   </td>
+                                   <td className="px-6 py-4 text-center">
+                                      <span className="inline-flex items-center justify-center px-3 py-1 bg-amber-100 text-amber-700 font-black text-xs rounded-lg">
+                                         {record.liters} L
+                                      </span>
+                                   </td>
+                                   <td className="px-6 py-4">
+                                      <span className="inline-flex items-center justify-center px-3 py-1 bg-green-100 text-green-700 font-black text-xs rounded-lg">
+                                         {record.cost.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                      </span>
+                                   </td>
+                                </tr>
+                             );
+                          })
+                       ) : (
+                          <tr>
+                             <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                                <AlertCircle className="w-12 h-12 mx-auto mb-3 text-slate-200" />
+                                <p className="font-black uppercase text-xs tracking-widest">No hay repostajes en este periodo</p>
+                             </td>
+                          </tr>
+                       )}
+                    </tbody>
+                 </table>
+              </div>
+           </div>
+        ) : null}
 
       </div>
     </div>

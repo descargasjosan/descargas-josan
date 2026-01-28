@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   Users, Building2, Database, Car, BarChart3, Settings, LogOut, Plus, Edit2, Trash2, Save, 
@@ -15,9 +14,10 @@ import StatisticsPanel from './components/StatisticsPanel';
 import CompactPlanningView from './components/CompactPlanningView';
 import FleetManager from './components/FleetManager'; 
 import LoginScreen from './components/LoginScreen';
+import WorkerImportModal from './components/WorkerImportModal';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS, WORKER_ROLES, MOCK_VEHICLES } from './lib/constants'; 
 import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course } from './lib/types';
-import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
+import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY, getWorkerDisplayName, getWorkerSSFormat } from './lib/utils';
 import { supabase } from '../supabaseClient';
 
 interface CalendarSelectorProps {
@@ -159,7 +159,10 @@ const App: React.FC = () => {
 
   const [planning, setPlanning] = useState<PlanningState>(defaultState);
   
-  const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving'>('connected');
+  const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving' | 'saved'>('connected');
+  const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+  const [lastAutoBackupTime, setLastAutoBackupTime] = useState<Date | null>(null);
   const [dataRecoveryMode, setDataRecoveryMode] = useState(false);
   const [remoteDataExists, setRemoteDataExists] = useState(false);
   const [advancedRecovery, setAdvancedRecovery] = useState(false);
@@ -194,6 +197,7 @@ const App: React.FC = () => {
                workers: Array.isArray(remoteData.workers) ? remoteData.workers : defaultState.workers,
                clients: Array.isArray(remoteData.clients) ? remoteData.clients : defaultState.clients,
                jobs: Array.isArray(remoteData.jobs) ? remoteData.jobs : [],
+               fuelRecords: Array.isArray(remoteData.fuelRecords) ? remoteData.fuelRecords : defaultState.fuelRecords,
                vehicles: Array.isArray(remoteData.vehicles) ? remoteData.vehicles : defaultState.vehicles,
                vehicleAssignments: Array.isArray(remoteData.vehicleAssignments) ? remoteData.vehicleAssignments : [],
                standardTasks: Array.isArray(remoteData.standardTasks) ? remoteData.standardTasks : defaultState.standardTasks,
@@ -252,10 +256,36 @@ const App: React.FC = () => {
     setDbStatus('saving');
     const timer = setTimeout(async () => {
       try {
-        await supabase.from('planning_snapshots').upsert({ id: 1, data: planning, updated_at: new Date() });
-        setDbStatus('connected');
+        const { data, error } = await supabase
+          .from('planning_snapshots')
+          .upsert({ id: 1, data: planning, updated_at: new Date() })
+          .select();
+
+        if (error) {
+          console.error('Error de Supabase:', error);
+          
+          // Detectar errores de autenticación
+          if (error.message?.includes('JWT') || error.message?.includes('token') || error.code === 'PGRST301') {
+            showNotification('Error de autenticación. Por favor, inicia sesión nuevamente.', 'error');
+            setDbStatus('error');
+            // Opcional: redirigir al login
+            // handleLogout();
+          } else {
+            showNotification('Error al guardar en la base de datos', 'error');
+            setDbStatus('error');
+          }
+        } else {
+          setDbStatus('saved');
+          setLastSavedTime(new Date());
+          // Volver a 'connected' después de 2 segundos
+          setTimeout(() => {
+            setDbStatus('connected');
+          }, 2000);
+        }
       } catch (e) {
-        setDbStatus('error'); 
+        console.error('Error general al guardar:', e);
+        showNotification('Error de conexión al guardar datos', 'error');
+        setDbStatus('error');
       }
     }, 1000); 
 
@@ -290,7 +320,7 @@ const App: React.FC = () => {
       }));
 
       // Mostrar notificación sobre los cambios automáticos
-      const workerNames = workersNeedingUpdate.map(w => w.name).join(', ');
+      const workerNames = workersNeedingUpdate.map(w => getWorkerDisplayName(w)).join(', ');
       showNotification(
         `${workersNeedingUpdate.length} operario(s) cambiado(s) a Disponible automáticamente: ${workerNames}`,
         'info'
@@ -320,6 +350,7 @@ const App: React.FC = () => {
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showSSReport, setShowSSReport] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [showWorkerImportModal, setShowWorkerImportModal] = useState(false);
   const [selectedNotificationWorkerId, setSelectedNotificationWorkerId] = useState<string | null>(null);
   const [showCalendarSelector, setShowCalendarSelector] = useState(false);
   const [workerListModal, setWorkerListModal] = useState<{clientId: string, centerId: string, date: string} | null>(null);
@@ -347,6 +378,135 @@ const App: React.FC = () => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
+
+  // Función para guardar manualmente con notificación de éxito
+  const saveToSupabase = useCallback(async (showSuccessNotification = false) => {
+    try {
+      setDbStatus('saving');
+      
+      const { data, error } = await supabase
+        .from('planning_snapshots')
+        .upsert({ id: 1, data: planning, updated_at: new Date() })
+        .select();
+
+      if (error) {
+        console.error('Error de Supabase:', error);
+        
+        // Detectar errores de autenticación
+        if (error.message?.includes('JWT') || error.message?.includes('token') || error.code === 'PGRST301') {
+          showNotification('Error de autenticación. Por favor, inicia sesión nuevamente.', 'error');
+          setDbStatus('error');
+          return false;
+        } else {
+          showNotification('Error al guardar en la base de datos', 'error');
+          setDbStatus('error');
+          return false;
+        }
+      } else {
+        setDbStatus('saved');
+        setLastSavedTime(new Date());
+        if (showSuccessNotification) {
+          showNotification('Guardado exitosamente', 'success');
+        }
+        // Volver a 'connected' después de 2 segundos
+        setTimeout(() => {
+          setDbStatus('connected');
+        }, 2000);
+        return true;
+      }
+    } catch (e) {
+      console.error('Error general al guardar:', e);
+      showNotification('Error de conexión al guardar datos', 'error');
+      setDbStatus('error');
+      return false;
+    }
+  }, [planning, showNotification]);
+
+  // Función de backup automático programado
+  const performAutoBackup = useCallback(() => {
+    if (!autoBackupEnabled) return;
+    
+    const now = new Date();
+    
+    // Ejecutar durante las 24 horas del día
+    try {
+      const dataStr = JSON.stringify(planning, null, 2);
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Nombre con timestamp completo
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+      link.download = `backup_${dateStr}_${timeStr}.json`;
+      
+      // Simular clic para descargar
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      // Notificación de éxito
+      showNotification(`Backup automático creado: ${timeStr}`, 'success');
+      setLastAutoBackupTime(now);
+      console.log(`Backup automático ejecutado: backup_${dateStr}_${timeStr}.json`);
+      
+    } catch (error) {
+      console.error('Error en backup automático:', error);
+      showNotification('Error en backup automático', 'error');
+    }
+  }, [autoBackupEnabled, showNotification]);
+
+  // Timer para backup automático cada hora (24h)
+  useEffect(() => {
+    if (!autoBackupEnabled) return;
+    
+    // Configurar timer para ejecutar cada hora (sin ejecutar al iniciar)
+    const interval = setInterval(() => {
+      performAutoBackup();
+    }, 60 * 60 * 1000); // 1 hora en milisegundos
+    
+    return () => clearInterval(interval);
+  }, [autoBackupEnabled, performAutoBackup]);
+
+  // Backup al cerrar la página
+  useEffect(() => {
+    if (!autoBackupEnabled) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Ejecutar backup final al cerrar
+      try {
+        const dataStr = JSON.stringify(planning, null, 2);
+        const blob = new Blob([dataStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        
+        // Nombre con timestamp para el backup de cierre
+        const now = new Date();
+        const dateStr = now.toISOString().split('T')[0];
+        const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+        link.download = `backup_cierre_${dateStr}_${timeStr}.json`;
+        
+        // Simular clic para descargar
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        console.log(`Backup de cierre creado: backup_cierre_${dateStr}_${timeStr}.json`);
+      } catch (error) {
+        console.error('Error en backup de cierre:', error);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [autoBackupEnabled, planning]);
 
   const handleDragStart = (worker: Worker) => setDraggedWorkerId(worker.id);
   
@@ -522,7 +682,7 @@ const App: React.FC = () => {
       try {
         console.log(`Copiando lista ${type}:`, list); // Debug
         const title = type === 'altas' ? `ALTAS ${formatDateDMY(planning.currentDate)}` : `BAJAS ${formatDateDMY(planning.currentDate)}`;
-        const content = list.map(w => `${w.name} - ${w.dni}`).join('\n');
+        const content = list.map(w => getWorkerSSFormat(w)).join('\n');
         const fullText = `${title}\n\n${content}`;
         
         console.log('Texto a copiar:', fullText); // Debug
@@ -657,6 +817,7 @@ const App: React.FC = () => {
       ...duplicatingJob,
       id: `j-copy-${Date.now()}`,
       date: duplicationDate,
+      deliveryNote: '', // No duplicar el albarán
       isCancelled: false, cancellationReason: '', isFinished: false, actualEndTime: undefined,
       assignedWorkerIds: keepWorkersOnDuplicate ? duplicatingJob.assignedWorkerIds : [],
       workerTimes: keepWorkersOnDuplicate ? { ...duplicatingJob.workerTimes } : {}
@@ -682,9 +843,10 @@ const App: React.FC = () => {
           id: `w-${Date.now()}`,
           code: '',
           name: '',
+          apodo: undefined,
           dni: '',
           phone: '',
-          role: 'Mozo almacén',
+          role: 'Mozo Almacén',
           status: WorkerStatus.DISPONIBLE, // Asegurado que sea Disponible por defecto
           contractType: ContractType.FIJO_DISCONTINUO,
           hasVehicle: false,
@@ -785,6 +947,21 @@ const App: React.FC = () => {
     }));
     setEditingStandardTask(null);
     showNotification("Tarea eliminada", "success");
+  };
+
+  // Función para limpiar todas las plantillas rápidas (standardTasks)
+  const clearAllStandardTasks = () => {
+    const taskCount = planning.standardTasks.length;
+    if (taskCount === 0) {
+      showNotification("No hay plantillas rápidas para eliminar", "info");
+      return;
+    }
+    
+    setPlanning(prev => ({
+      ...prev,
+      standardTasks: []
+    }));
+    showNotification(`Se eliminaron ${taskCount} plantillas rápidas`, "success");
   };
 
   const handleAddGlobalCourse = () => {
@@ -900,7 +1077,11 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `backup_${cleanedPlanning.currentDate}.json`;
+      // Crear nombre de archivo con fecha y hora
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+      link.download = `backup_${dateStr}_${timeStr}.json`;
       link.click();
   };
   const exportDatabaseToExcel = () => showNotification("Función de exportación completa disponible", "info"); 
@@ -1023,7 +1204,7 @@ const App: React.FC = () => {
   let workers = cleanedPlanning.workers.filter(w => !showArchivedWorkers ? !w.isArchived : true);
   
   // Filtrar por búsqueda
-  workers = workers.filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase()));
+  workers = workers.filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase()) || (w.apodo && w.apodo.toLowerCase().includes(workerTableSearch.toLowerCase())));
   
   // Filtrar por disponibilidad (libres/asignados)
   if (workerAvailabilityFilter !== 'all') {
@@ -1387,12 +1568,35 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <div className={`fixed bottom-4 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all ${dbStatus === 'connected' ? 'bg-green-50 text-green-600 border-green-100' : dbStatus === 'saving' ? 'bg-blue-50 text-blue-600 border-blue-100' : dbStatus === 'loading' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
-         {dbStatus === 'connected' && <><Cloud className="w-3 h-3" /> Conectado</>}
+      <div 
+        className={`fixed bottom-4 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all cursor-pointer ${
+          dbStatus === 'connected' ? 'bg-green-50 text-green-600 border-green-100 hover:bg-green-100' : 
+          dbStatus === 'saving' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
+          dbStatus === 'loading' ? 'bg-amber-50 text-amber-600 border-amber-100' : 
+          dbStatus === 'saved' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
+          'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
+        }`}
+        onClick={() => {
+          if (dbStatus === 'connected' || dbStatus === 'error') {
+            saveToSupabase(true); // Guardar manualmente con notificación de éxito
+          }
+        }}
+        title={dbStatus === 'connected' || dbStatus === 'error' ? 'Clic para guardar manualmente' : undefined}
+      >
+         {dbStatus === 'connected' && <><Cloud className="w-3 h-3" /> {lastSavedTime ? `Guardado ${lastSavedTime.toLocaleTimeString()}` : 'Conectado'}</>}
          {dbStatus === 'saving' && <><RotateCcw className="w-3 h-3 animate-spin" /> Guardando...</>}
          {dbStatus === 'loading' && <><Loader2 className="w-3 h-3 animate-spin" /> Cargando...</>}
-         {dbStatus === 'error' && <><CloudOff className="w-3 h-3" /> Sin conexión (Local)</>}
+         {dbStatus === 'saved' && <><CheckCircle2 className="w-3 h-3" /> Guardado</>}
+         {dbStatus === 'error' && <><CloudOff className="w-3 h-3" /> Sin conexión (Clic para reintentar)</>}
       </div>
+
+      {/* Indicador de Backup Automático - Arriba */}
+      {autoBackupEnabled && (
+        <div className="fixed bottom-16 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all bg-amber-50 text-amber-600 border-amber-100">
+          <DownloadCloud className="w-3 h-3" />
+          {lastAutoBackupTime ? `Auto ${lastAutoBackupTime.toLocaleTimeString()}` : 'Auto activo'}
+        </div>
+      )}
 
       {/* SIDEBAR NAVIGATION */}
       <aside className="w-20 bg-slate-900 flex flex-col items-center py-8 gap-8 shrink-0 z-50 shadow-2xl">
@@ -1406,10 +1610,8 @@ const App: React.FC = () => {
             <button onClick={() => setView('databases')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'databases' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Bases de Datos"><Database className="w-6 h-6" /></button>
             <button onClick={() => setView('fleet')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'fleet' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión de Flota"><Car className="w-6 h-6" /></button>
             <button onClick={() => setView('stats')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'stats' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Estadísticas"><BarChart3 className="w-6 h-6" /></button>
+            <button onClick={() => setShowBackupModal(true)} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'backup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Copias de Seguridad"><DownloadCloud className="w-4 h-4" /></button>
          </nav>
-         <div className="flex flex-col gap-4 w-full px-3">
-            <button onClick={() => setShowBackupModal(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Base de Datos"><DownloadCloud className="w-4 h-4" /></button>
-         </div>
       </aside>
 
       <div className="flex-1 flex overflow-hidden relative">
@@ -1491,7 +1693,16 @@ const App: React.FC = () => {
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
                <h2 className="text-2xl font-black text-slate-900 italic uppercase">Gestión de Operarios</h2>
-               <button onClick={handleOpenNewWorker} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Operario</button>
+               <div className="flex gap-3">
+                 <button 
+                   onClick={() => setShowWorkerImportModal(true)}
+                   className="bg-blue-600 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest flex items-center gap-2 hover:bg-blue-700 transition-colors"
+                 >
+                   <FileSpreadsheet className="w-4 h-4" />
+                   Importar Nombres
+                 </button>
+                 <button onClick={handleOpenNewWorker} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Operario</button>
+               </div>
              </div>
              <div className="bg-white rounded-[32px] border border-slate-200 p-6 shadow-sm mb-6">
                 <div className="flex items-center gap-4 mb-4">
@@ -1713,7 +1924,8 @@ const App: React.FC = () => {
                  <thead className="bg-slate-100 border-b border-slate-200 sticky top-0 z-10">
                    <tr>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-24">Código</th>
-                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Operario</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Nombre</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Apellidos</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">DNI</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Teléfono</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Vehículo</th>
@@ -1741,8 +1953,18 @@ const App: React.FC = () => {
                            </div>
                         </td>
                         <td className="px-6 py-4">
-                           <p className="font-black text-slate-900 text-sm">{w.name}</p>
+                           <p className="font-black text-slate-900 text-sm">
+                             {w.firstName || w.name?.split(' ')[0] || w.name}
+                           </p>
                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{w.role}</p>
+                        </td>
+                        <td className="px-6 py-4">
+                           <p className="font-black text-slate-900 text-sm">
+                             {w.lastName || (() => {
+                               const parts = w.name?.split(' ');
+                               return parts && parts.length > 1 ? parts.slice(1).join(' ') : '';
+                             })() || '-'}
+                           </p>
                         </td>
                         <td className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">{w.dni}</td>
                         <td className="px-6 py-4 text-xs font-bold text-slate-500">{w.phone}</td>
@@ -1941,11 +2163,34 @@ const App: React.FC = () => {
             <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
                <h3 className="text-lg font-black text-slate-900 italic uppercase mb-4">Base de Datos</h3>
                <div className="space-y-3">
+                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200">
+                     <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-amber-800 uppercase tracking-wider">Backup Automático</span>
+                        <button
+                           onClick={() => setAutoBackupEnabled(!autoBackupEnabled)}
+                           className={`w-12 h-6 rounded-full transition-colors ${
+                              autoBackupEnabled ? 'bg-amber-500' : 'bg-amber-200'
+                           }`}
+                        >
+                           <div className={`w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${
+                              autoBackupEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                           }`} />
+                        </button>
+                     </div>
+                     <p className="text-[10px] text-amber-700">
+                        {autoBackupEnabled 
+                           ? '✅ Activo: Cada hora + al cerrar página' 
+                           : '❌ Inactivo: Sin backups automáticos'
+                        }
+                     </p>
+                  </div>
+                  
                   <button onClick={exportBackup} className="w-full py-4 bg-blue-50 rounded-2xl font-black text-xs uppercase tracking-widest text-blue-600 hover:bg-blue-100 flex items-center justify-center gap-2 transition-colors"><DownloadCloud className="w-4 h-4" /> Exportar Backup JSON</button>
                   <button onClick={exportDatabaseToExcel} className="w-full py-4 bg-green-50 rounded-2xl font-black text-xs uppercase tracking-widest text-green-600 hover:bg-green-100 flex items-center justify-center gap-2 transition-colors"><FileSpreadsheet className="w-4 h-4" /> Exportar Todo a Excel</button>
                   
                   <button onClick={() => backupInputRef.current?.click()} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-slate-200 flex items-center justify-center gap-2 transition-colors"><Upload className="w-4 h-4" /> Importar Excel / JSON</button>
                   <button onClick={downloadExcelTemplate} className="w-full py-4 bg-purple-50 rounded-2xl font-black text-xs uppercase tracking-widest text-purple-600 hover:bg-purple-100 flex items-center justify-center gap-2 transition-colors"><Table className="w-4 h-4" /> Descargar Plantilla</button>
+                  <button onClick={clearAllStandardTasks} className="w-full py-4 bg-red-50 rounded-2xl font-black text-xs uppercase tracking-widest text-red-600 hover:bg-red-100 flex items-center justify-center gap-2 transition-colors"><Trash2 className="w-4 h-4" /> Limpiar Plantillas Rápidas</button>
                </div>
             </div>
          </div>
@@ -1989,8 +2234,7 @@ const App: React.FC = () => {
                           ssReport.altas.map(w => (
                              <div key={w.id} className="bg-white p-3 rounded-xl border border-green-100 shadow-sm flex justify-between items-center">
                                 <div>
-                                   <p className="font-black text-slate-700 text-sm">{w.name}</p>
-                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{w.dni}</p>
+                                   <p className="font-black text-slate-700 text-sm">{getWorkerSSFormat(w)}</p>
                                 </div>
                                 <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-1 rounded">{w.code}</span>
                              </div>
@@ -2022,8 +2266,7 @@ const App: React.FC = () => {
                           ssReport.bajas.map(w => (
                              <div key={w.id} className="bg-white p-3 rounded-xl border border-red-100 shadow-sm flex justify-between items-center">
                                 <div>
-                                   <p className="font-black text-slate-700 text-sm">{w.name}</p>
-                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{w.dni}</p>
+                                   <p className="font-black text-slate-700 text-sm">{getWorkerSSFormat(w)}</p>
                                 </div>
                                 <span className="text-[10px] font-black text-red-600 bg-red-50 px-2 py-1 rounded">{w.code}</span>
                              </div>
@@ -2364,6 +2607,10 @@ const App: React.FC = () => {
               <div className="space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label>
                  <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.name} onChange={e => setEditingWorker({...editingWorker, name: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Apodo (Opcional)</label>
+                 <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.apodo || ''} onChange={e => setEditingWorker({...editingWorker, apodo: e.target.value || undefined})} placeholder="Si tiene apodo, se mostrará en lugar del nombre" />
               </div>
               <div className="space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Código</label>
@@ -3372,6 +3619,21 @@ const App: React.FC = () => {
         </div>
       </div>
     )}
+
+    {/* Modal de Importación de Operarios */}
+    <WorkerImportModal
+      isOpen={showWorkerImportModal}
+      onClose={() => setShowWorkerImportModal(false)}
+      onImportComplete={(result) => {
+        if (result.success) {
+          showNotification(`Importación completada: ${result.updatedCount} operarios actualizados`, 'success');
+        } else {
+          showNotification('Error en la importación', 'error');
+        }
+        setShowWorkerImportModal(false);
+      }}
+      currentWorkers={planning.workers}
+    />
 
   </div>
 );

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText, List } from 'lucide-react';
 import { Job, PlanningState, Worker, WorkerStatus, ContractType, ReinforcementGroup } from '../lib/types';
-import { isTimeOverlap, checkContinuityRisk, formatDateDMY } from '../lib/utils';
+import { isTimeOverlap, checkContinuityRisk, formatDateDMY, getWorkerDisplayName } from '../lib/utils';
 
 interface PlanningBoardProps {
   planning: PlanningState;
@@ -218,7 +218,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-[10px] font-black transition-colors ${itemClass}`}>
                           {worker.code}
                         </div>
-                        <div className="text-left"><p className="text-sm font-black text-slate-900 tracking-tight group-hover:text-blue-700">{worker.name}</p><p className="text-[10px] font-bold text-slate-400 uppercase">{worker.role}</p></div>
+                        <div className="text-left"><p className="text-sm font-black text-slate-900 tracking-tight group-hover:text-blue-700">{getWorkerDisplayName(worker)}</p><p className="text-[10px] font-bold text-slate-400 uppercase">{worker.role}</p></div>
                       </div>
                       {continuityGaps && <Euro className="w-4 h-4 text-amber-500" />}
                     </button>
@@ -265,10 +265,46 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
       <div className="space-y-12">
         {datesToShow.map(date => {
           const dailyJobs = planning.jobs.filter(j => j.date === date);
-          const activeClientIds = new Set(dailyJobs.map(j => j.clientId));
-          const activeClients = planning.clients.filter(c => activeClientIds.has(c.id));
           const isViewToday = date === currentDateStr;
           const isViewPast = date < currentDateStr;
+
+          // NUEVO: Agrupar por albarán + cliente
+          const groupedJobs = dailyJobs.reduce((groups: Record<string, { albaran: string; client: any; clientName: string; jobs: Job[] }>, job) => {
+            const client = planning.clients.find(c => c.id === job.clientId);
+            const clientName = client?.name || 'Cliente Desconocido';
+            
+            // Crear clave de agrupación usando deliveryNote (el campo correcto)
+            const albaranKey = job.deliveryNote || 'Sin Albarán';
+            const groupKey = `${albaranKey} - ${clientName}`;
+            
+            if (!groups[groupKey]) {
+              groups[groupKey] = {
+                albaran: job.deliveryNote || 'Sin Albarán',
+                client: client,
+                clientName: clientName,
+                jobs: []
+              };
+            }
+            
+            groups[groupKey].jobs.push(job);
+            return groups;
+          }, {});
+
+          // Ordenar grupos: albaranes numéricos primero, luego "Sin Albarán"
+          const sortedGroups = Object.entries(groupedJobs).sort(([keyA], [keyB]) => {
+            const albaranA = keyA.split(' - ')[0];
+            const albaranB = keyB.split(' - ')[0];
+            
+            // Si ambos son "Sin Albarán", mantener orden
+            if (albaranA === 'Sin Albarán' && albaranB === 'Sin Albarán') return 0;
+            
+            // "Sin Albarán" va al final
+            if (albaranA === 'Sin Albarán') return 1;
+            if (albaranB === 'Sin Albarán') return -1;
+            
+            // Orden numérico de albaranes
+            return albaranA.localeCompare(albaranB);
+          });
 
           return (
             <div key={date} className="animate-in fade-in slide-in-from-bottom-2">
@@ -283,34 +319,33 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                 </div>
               )}
 
-              {activeClients.length > 0 ? (
+              {sortedGroups.length > 0 ? (
                 <div className="space-y-4">
-                  {activeClients.map(client => {
-                    const clientJobs = dailyJobs.filter(j => j.clientId === client.id);
-                    const isDragOverClient = dragOverClientId === client.id;
+                  {sortedGroups.map(([groupKey, groupData]: [string, { albaran: string; client: any; clientName: string; jobs: Job[] }]) => {
+                    const isDragOverClient = dragOverClientId === groupData.client?.id;
                     
                     return (
                       <div 
-                        key={`${date}-${client.id}`} 
+                        key={`${date}-${groupKey}`} 
                         draggable
                         onDragStart={(e) => {
-                           e.dataTransfer.setData('clientId', client.id);
+                           e.dataTransfer.setData('clientId', groupData.client?.id || '');
                            e.dataTransfer.effectAllowed = 'move';
                         }}
-                        onDragOver={(e) => handleClientDragOver(e, client.id)}
+                        onDragOver={(e) => handleClientDragOver(e, groupData.client?.id || '')}
                         onDragLeave={() => setDragOverClientId(null)}
-                        onDrop={(e) => handleDrop(e, client.id, 'client')}
+                        onDrop={(e) => handleDrop(e, groupData.client?.id || '', 'client')}
                         className={`bg-white rounded-[24px] border shadow-sm overflow-hidden transition-all duration-200 ${isDragOverClient ? 'border-blue-400 ring-2 ring-blue-100 transform scale-[1.01]' : 'border-slate-200'}`}
                       >
-                        <div className="px-4 py-2.5 bg-slate-900 text-white flex items-center justify-between cursor-grab active:cursor-grabbing">
+                        <div className="px-4 py-1.5 bg-slate-900 text-white flex items-center justify-between cursor-grab active:cursor-grabbing">
                           <div className="flex items-center gap-3">
-                            <div className="text-slate-500 hover:text-white transition-colors" title="Mover Cliente"><Move className="w-4 h-4" /></div>
-                            <div className="w-8 h-8 bg-white/20 backdrop-blur-md rounded-lg flex items-center justify-center font-black text-[10px]">{client.logo}</div>
-                            <h3 className="text-[13px] font-black uppercase tracking-tight">{client.name}</h3>
+                            <div className="text-slate-500 hover:text-white transition-colors" title="Mover Grupo"><Move className="w-4 h-4" /></div>
+                            <div className="w-8 h-8 bg-white/20 backdrop-blur-md rounded-lg flex items-center justify-center font-black text-[10px]">{groupData.client?.logo || 'C'}</div>
+                            <h3 className="text-[12px] font-black uppercase tracking-tight">{groupData.clientName}</h3>
                           </div>
                           <button 
                             onMouseDown={(e) => e.stopPropagation()}
-                            onClick={() => onAddJob(client.id, date)} 
+                            onClick={() => onAddJob(groupData.client?.id || '', date)} 
                             className="bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all flex items-center gap-1.5 border border-white/10"
                           >
                             <Plus className="w-3 h-3" /> Nueva Tarea
@@ -318,8 +353,8 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                         </div>
 
                         <div className="divide-y divide-slate-100">
-                          {clientJobs.map(job => {
-                            const center = client.centers.find(c => c.id === job.centerId);
+                          {groupData.jobs.map(job => {
+                            const center = groupData.client?.centers?.find(c => c.id === job.centerId);
                             const isFull = job.assignedWorkerIds.length >= job.requiredWorkers;
                             const progress = (job.assignedWorkerIds.length / job.requiredWorkers) * 100;
                             const isCancelled = job.isCancelled;
@@ -533,7 +568,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                                     } ${dailyNote ? 'pr-2' : ''}`}
                                                   >
                                                     <span className={codeColorClass}>{worker.code}</span>
-                                                    <span className="truncate max-w-[60px]">{worker.name.split(' ')[0]}</span>
+                                                    <span className="truncate max-w-[60px]">{worker.apodo && worker.apodo.trim() ? getWorkerDisplayName(worker) : getWorkerDisplayName(worker).split(' ')[0]}</span>
                                                     
                                                     {continuityGaps && <Euro className="w-2.5 h-2.5 text-amber-500" />}
                                                     {dailyNote && (
@@ -645,7 +680,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                         const worker = planning.workers.find(w => w.id === workerId);
                         return worker ? (
                           <div key={workerId} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 text-xs">
-                            <span className="font-medium">{worker.name}</span>
+                            <span className="font-medium">{getWorkerDisplayName(worker)}</span>
                             <button 
                               onClick={() => {
                                 const updatedGroups = reinforcementModal.groups.map(g => 
@@ -717,7 +752,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                       
                       return (
                         <div key={worker.id} className="flex items-center justify-between p-3 hover:bg-white rounded-lg transition-colors">
-                          <span className="text-sm font-medium">{worker.name} ({worker.code})</span>
+                          <span className="text-sm font-medium">{getWorkerDisplayName(worker)} ({worker.code})</span>
                           <input
                             type="checkbox"
                             className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"

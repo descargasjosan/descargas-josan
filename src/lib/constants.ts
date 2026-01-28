@@ -4,12 +4,11 @@ import { WorkerStatus, JobType, Worker, Client, Job, ContractType, Holiday, Stan
 const today = new Date().toISOString().split('T')[0];
 
 export const WORKER_ROLES = [
-  'Mozo',
-  'Carretillero',
-  'Jefe de Equipo',
-  'Administrativo',
-  'Conductor',
-  'Limpieza'
+  'Mozo Almacén',
+  'Jefe Equipo',
+  'Gerente',
+  'Director Administración',
+  'Director Operaciones'
 ];
 
 export const AVAILABLE_COURSES = [

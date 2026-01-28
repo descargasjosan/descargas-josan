@@ -78,6 +78,9 @@ export interface Worker {
   id: string;
   code: string;
   name: string;
+  firstName?: string;   // Nuevo: nombre separado
+  lastName?: string;    // Nuevo: apellido separado
+  apodo?: string; // Apodo o nombre alternativo para mostrar en badges
   dni: string;
   phone: string;
   role: string;
@@ -191,3 +194,19 @@ export interface PlanningState {
 }
 
 export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact' | 'fleet';
+
+// --- TIPOS PARA IMPORTACIÓN DE OPERARIOS ---
+
+export interface WorkerImportData {
+  code: string;        // Código del operario (para mapeo)
+  firstName: string;   // Nombre
+  lastName: string;    // Apellidos
+}
+
+export interface ImportResult {
+  success: boolean;
+  message: string;
+  updatedCount: number;
+  notFoundCodes: string[];
+  errors: string[];
+}

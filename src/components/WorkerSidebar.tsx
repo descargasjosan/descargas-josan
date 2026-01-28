@@ -2,7 +2,7 @@
 import React from 'react';
 import { Search, User, Car, Euro, CalendarCheck, Briefcase } from 'lucide-react';
 import { Worker, PlanningState, WorkerStatus, ContractType } from '../lib/types';
-import { checkContinuityRisk } from '../lib/utils';
+import { checkContinuityRisk, getWorkerDisplayName } from '../lib/utils';
 
 interface WorkerSidebarProps {
   workers: Worker[];
@@ -31,6 +31,17 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
     const firstName = parts[0];
     const lastNameInitial = parts[1][0].toUpperCase();
     return `${firstName} ${lastNameInitial}.`;
+  };
+
+  // Función para obtener el nombre corto, pero sin acortar los apodos
+  const getDisplayShortName = (worker: Worker) => {
+    const displayName = getWorkerDisplayName(worker);
+    // Si el operario tiene apodo, mostrarlo completo sin acortar
+    if (worker.apodo && worker.apodo.trim()) {
+      return displayName;
+    }
+    // Si no tiene apodo, acortar el nombre real
+    return getShortName(displayName);
   };
 
   // FILTRO: Muestra trabajadores activos/disponibles y gestiona las fechas de bajas/vacaciones
@@ -187,9 +198,9 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
                   ? 'bg-slate-500 text-white border border-slate-600' 
                   : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-500'
               }`}
-              title="Resto"
+              title="Indefinidos"
             >
-              R
+              IN
             </button>
           </div>
         </div>
@@ -220,7 +231,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
               draggable
               onDragStart={() => onDragStart(worker)}
               onClick={() => onSelectWorker(worker.id)}
-              title={`${worker.name}\nTel: ${worker.phone}`}
+              title={`${getWorkerDisplayName(worker)}\nTel: ${worker.phone}`}
               className={`
                 group flex items-center gap-2 p-2 border-b border-slate-50 cursor-grab active:cursor-grabbing transition-all hover:bg-slate-50
                 ${isSelected ? 'bg-blue-50/80 border-blue-100' : ''}
@@ -242,7 +253,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
               <div className="flex-1 min-w-0 flex flex-col justify-center">
                 <div className="flex items-center gap-1">
                   <p className={`text-[10px] font-black truncate leading-none ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>
-                    {getShortName(worker.name)}
+                    {getDisplayShortName(worker)}
                   </p>
                   {continuityGaps && (
                     <div title="Riesgo Cotización">
