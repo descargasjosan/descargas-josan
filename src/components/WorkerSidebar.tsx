@@ -1,8 +1,7 @@
-
 import React from 'react';
 import { Search, User, Car, Euro, CalendarCheck, Briefcase } from 'lucide-react';
-import { Worker, PlanningState, WorkerStatus, ContractType } from '../lib/types';
-import { checkContinuityRisk } from '../lib/utils';
+import { Worker, PlanningState, WorkerStatus, ContractType, Job, JobType } from '../lib/types';
+import { checkContinuityRisk, getWorkerDisplayName, getCurrentWorkerStatus } from '../lib/utils';
 
 interface WorkerSidebarProps {
   workers: Worker[];
@@ -11,6 +10,7 @@ interface WorkerSidebarProps {
   selectedWorkerId: string | null;
   onSelectWorker: (id: string) => void;
   onUpdateWorkerStatus: (workerId: string, status: WorkerStatus) => void;
+  getCorrectWorkerStatus?: (worker: Worker) => WorkerStatus;
 }
 
 const WorkerSidebar: React.FC<WorkerSidebarProps> = ({ 
@@ -18,7 +18,8 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
   planning, 
   onDragStart,
   selectedWorkerId,
-  onSelectWorker
+  onSelectWorker,
+  getCorrectWorkerStatus
 }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [availabilityFilter, setAvailabilityFilter] = React.useState<'all' | 'free' | 'assigned'>('all');
@@ -33,6 +34,36 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
     return `${firstName} ${lastNameInitial}.`;
   };
 
+  // Función para obtener el nombre corto, pero sin acortar los apodos
+  const getDisplayShortName = (worker: Worker) => {
+    const displayName = getWorkerDisplayName(worker);
+    // Si el operario tiene apodo, mostrarlo completo sin acortar
+    if (worker.apodo && worker.apodo.trim()) {
+      return displayName;
+    }
+    // Si no tiene apodo, acortar el nombre real
+    return getShortName(displayName);
+  };
+
+  // Función para determinar el estado de un operario en una fecha específica (basada en registros)
+  const getWorkerStatusForDate = (worker: Worker, date: string): WorkerStatus => {
+    if (!worker.statusRecords || worker.statusRecords.length === 0) {
+      return WorkerStatus.DISPONIBLE;
+    }
+
+    const targetDate = new Date(date);
+    
+    // Buscar registro activo para la fecha específica
+    const activeRecord = worker.statusRecords.find(record => {
+      const startDate = new Date(record.startDate);
+      const endDate = record.endDate ? new Date(record.endDate) : new Date('9999-12-31'); // INDEFINIDO
+      
+      return targetDate >= startDate && targetDate <= endDate;
+    });
+
+    return activeRecord ? activeRecord.status : WorkerStatus.DISPONIBLE;
+  };
+
   // FILTRO: Muestra trabajadores activos/disponibles y gestiona las fechas de bajas/vacaciones
   const filteredWorkers = workers.filter(w => {
     // 1. Descartar archivados
@@ -42,27 +73,16 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
     const matchesSearch = w.name.toLowerCase().includes(searchTerm.toLowerCase()) || w.code.includes(searchTerm);
     if (!matchesSearch) return false;
 
-    // 3. Lógica de Estado
+    // 3. Lógica de Estado - verificar disponibilidad para la fecha actual de planificación
+    const statusForCurrentDate = getWorkerStatusForDate(w, planning.currentDate);
     const isUnavailableStatus = [
       WorkerStatus.VACACIONES, 
       WorkerStatus.BAJA_MEDICA, 
       WorkerStatus.BAJA_PATERNIDAD
-    ].includes(w.status);
+    ].includes(statusForCurrentDate);
 
     if (isUnavailableStatus) {
-      // Si está en estado no disponible, verificamos si el periodo ya venció
-      // Si la fecha actual es mayor a la fecha fin, el trabajador vuelve a estar visible
-      if (w.statusEndDate && planning.currentDate > w.statusEndDate) {
-        // Continuar con los demás filtros
-      } else {
-        return false; // Sigue no disponible
-      }
-    }
-
-    // Si el estado es DISPONIBLE o ACTIVO, verificamos si tiene un periodo de bloqueo temporal
-    if (w.statusStartDate && w.statusEndDate) {
-      const isInStatusPeriod = planning.currentDate >= w.statusStartDate && planning.currentDate <= w.statusEndDate;
-      if (isInStatusPeriod) return false; // Ocultar si hoy está dentro del rango de bloqueo
+      return false; // Si está no disponible en la fecha actual, no mostrar
     }
 
     // 4. Filtro por disponibilidad (libres/asignados)
@@ -187,9 +207,9 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
                   ? 'bg-slate-500 text-white border border-slate-600' 
                   : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-500'
               }`}
-              title="Resto"
+              title="Indefinidos"
             >
-              R
+              IN
             </button>
           </div>
         </div>
@@ -220,7 +240,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
               draggable
               onDragStart={() => onDragStart(worker)}
               onClick={() => onSelectWorker(worker.id)}
-              title={`${worker.name}\nTel: ${worker.phone}`}
+              title={`${getWorkerDisplayName(worker)}\nTel: ${worker.phone}`}
               className={`
                 group flex items-center gap-2 p-2 border-b border-slate-50 cursor-grab active:cursor-grabbing transition-all hover:bg-slate-50
                 ${isSelected ? 'bg-blue-50/80 border-blue-100' : ''}
@@ -242,7 +262,7 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
               <div className="flex-1 min-w-0 flex flex-col justify-center">
                 <div className="flex items-center gap-1">
                   <p className={`text-[10px] font-black truncate leading-none ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>
-                    {getShortName(worker.name)}
+                    {getDisplayShortName(worker)}
                   </p>
                   {continuityGaps && (
                     <div title="Riesgo Cotización">

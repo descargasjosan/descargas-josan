@@ -256,7 +256,37 @@ const FleetManager: React.FC<FleetManagerProps> = ({
                
                <div className="flex gap-3">
                   <button onClick={() => setShowForm(false)} className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 text-sm">Cancelar</button>
-                  <button onClick={() => { if(editingVehicle.plate){ if(editingVehicle.id.startsWith('v-')) onAddVehicle(editingVehicle); else onEditVehicle(editingVehicle); setShowForm(false); } }} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-800 shadow-lg">Guardar</button>
+                  <button 
+                    onClick={() => { 
+                      if(!editingVehicle.plate.trim()){
+                        alert('La matrícula es obligatoria');
+                        return;
+                      }
+                      if(!editingVehicle.brand.trim()){
+                        alert('La marca es obligatoria');
+                        return;
+                      }
+                      if(!editingVehicle.model.trim()){
+                        alert('El modelo es obligatorio');
+                        return;
+                      }
+                      
+                      try {
+                        if(editingVehicle.id.startsWith('v-')) {
+                          onAddVehicle(editingVehicle);
+                        } else {
+                          onEditVehicle(editingVehicle);
+                        }
+                        setShowForm(false);
+                      } catch (error) {
+                        console.error('Error al guardar vehículo:', error);
+                        alert('Error al guardar el vehículo. Inténtalo de nuevo.');
+                      }
+                    }} 
+                    className="px-8 py-3 bg-slate-900 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-800 shadow-lg"
+                  >
+                    Guardar
+                  </button>
                </div>
             </div>
           </div>
