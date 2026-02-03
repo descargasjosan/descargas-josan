@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   Users, Building2, Database, Car, BarChart3, Settings, LogOut, Plus, Edit2, Trash2, Save, 
@@ -16,9 +15,350 @@ import CompactPlanningView from './components/CompactPlanningView';
 import FleetManager from './components/FleetManager'; 
 import LoginScreen from './components/LoginScreen';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS, WORKER_ROLES, MOCK_VEHICLES } from './lib/constants'; 
+import { getWorkerDisplayName, getWorkerSSFormat, addOrUpdateStatusRecord, removeStatusRecord, calculateDaysBetween, getCurrentWorkerStatus, getNextStatusChange, validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
 import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course } from './lib/types';
-import { validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
 import { supabase } from '../supabaseClient';
+
+// 🔍 SISTEMA DE DETECCIÓN Y LOGGING PARA EDGE
+const isEdgeBrowser = () => navigator.userAgent.includes('Edg');
+
+const edgeSpecificLog = (action: string, data?: any) => {
+  // 🔄 AHORA FUNCIONA EN TODOS LOS NAVEGADORES para diagnóstico
+  console.log(`🔍 LOG - ${action}:`, {
+    timestamp: new Date().toISOString(),
+    action,
+    dataSize: data ? JSON.stringify(data).length : 0,
+    memoryUsage: (performance as any).memory?.usedJSHeapSize || 'N/A',
+    cacheSize: performance.getEntriesByType('resource').length,
+    userAgent: navigator.userAgent,
+    isEdge: isEdgeBrowser(),
+    pageLoadTime: performance.timing.navigationStart
+  });
+};
+
+const detectStaleData = async () => {
+  // 🔄 AHORA FUNCIONA EN TODOS LOS NAVEGADORES
+  const localTimestamp = localStorage.getItem('last_sync');
+  const pageLoadTime = performance.timing.navigationStart;
+  const currentTime = Date.now();
+  const minutesOpen = (currentTime - pageLoadTime) / (1000 * 60);
+  
+  edgeSpecificLog('DETECTION CHECK', {
+    localTimestamp,
+    minutesOpen,
+    pageLoadTime: new Date(pageLoadTime).toISOString(),
+    isEdge: isEdgeBrowser()
+  });
+
+  // Forzar recarga si la página tiene más de 10 minutos abierta
+  if (minutesOpen > 10) {
+    console.warn('⚠️ Página abierta por mucho tiempo, datos pueden estar desincronizados');
+    edgeSpecificLog('LONG SESSION DETECTED', { minutesOpen });
+
+    // Mostrar advertencia al usuario
+    setTimeout(() => {
+      if (window.confirm('⚠️ La página ha estado abierta mucho tiempo. Para evitar pérdida de datos, ¿deseas recargar y sincronizar los datos más recientes?')) {
+        localStorage.setItem('forced_reload_reason', 'long_session');
+        window.location.reload();
+      }
+    }, 1000);
+  }
+
+  // Verificar si los datos locales son más antiguos que los del servidor
+  if (localTimestamp) {
+    try {
+      const { data: serverData } = await supabase
+        .from('planning_snapshots')
+        .select('updated_at')
+        .eq('id', 1)
+        .single();
+
+      if (serverData?.updated_at && serverData.updated_at > localTimestamp) {
+        console.warn('⚠️ DATOS LOCALES ANTIGUOS DETECTADOS');
+        edgeSpecificLog('STALE DATA DETECTED', {
+          localTimestamp,
+          serverTimestamp: serverData.updated_at
+        });
+
+        if (window.confirm('⚠️ Se han detectado datos más recientes en el servidor. ¿Deseas recargar para sincronizar?')) {
+          localStorage.setItem('forced_reload_reason', 'stale_data');
+          window.location.reload();
+        }
+      }
+    } catch (error) {
+      edgeSpecificLog('STALE CHECK ERROR', { error: error.message });
+    }
+  }
+};
+
+const logDataOperation = async (action: string, data: any, result?: any, userEmail?: string) => {
+  // 🔄 AHORA REGISTRA EN TODOS LOS NAVEGADORES
+  const logData = {
+    action,
+    dataSize: JSON.stringify(data).length,
+    result: result ? 'success' : 'error',
+    timestamp: new Date().toISOString(),
+    workers: data.workers?.length || 0,
+    jobs: data.jobs?.length || 0,
+    clients: data.clients?.length || 0,
+    userAgent: navigator.userAgent,
+    userEmail: userEmail || 'unknown',
+    isEdge: isEdgeBrowser()
+  };
+
+  edgeSpecificLog(`DATA ${action}`, logData);
+
+  // 🗂️ Guardar en localStorage (backup local)
+  saveLogToLocalStorage(logData);
+
+  // ☁️ Guardar en Supabase (centralizado)
+  saveLogToSupabase(logData);
+
+  // Guardar timestamp de última sincronización
+  if (action === 'SAVE' && result) {
+    localStorage.setItem('last_sync', new Date().toISOString());
+  }
+};
+
+// 🚨 SISTEMA DE GUARDADO DE EMERGENCIA
+const saveEmergencyBackup = (data: any, reason: string) => {
+  try {
+    const emergencyBackup = {
+      data: data,
+      timestamp: new Date().toISOString(),
+      reason: reason,
+      userAgent: navigator.userAgent
+    };
+    
+    localStorage.setItem('emergency_backup', JSON.stringify(emergencyBackup));
+    console.log('🚨 Backup de emergencia guardado:', reason);
+  } catch (error) {
+    console.error('❌ Error guardando backup de emergencia:', error);
+  }
+};
+
+// 🔄 Verificar backup de emergencia al iniciar
+const checkEmergencyBackup = () => {
+  try {
+    const backup = localStorage.getItem('emergency_backup');
+    if (backup) {
+      const emergencyData = JSON.parse(backup);
+      const backupTime = new Date(emergencyData.timestamp);
+      const currentTime = new Date();
+      const hoursDiff = (currentTime - backupTime) / (1000 * 60 * 60);
+      
+      if (hoursDiff < 24) {
+        console.log('🚨 Backup de emergencia disponible de hace', hoursDiff.toFixed(1), 'horas');
+        console.log('🚨 Razón:', emergencyData.reason);
+        console.log('🚨 Para recuperar: restoreEmergencyBackup()');
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error verificando backup de emergencia:', error);
+  }
+};
+
+// 🔄 Función para restaurar backup de emergencia
+const restoreEmergencyBackup = () => {
+  try {
+    const backup = localStorage.getItem('emergency_backup');
+    if (backup) {
+      const emergencyData = JSON.parse(backup);
+      
+      if (window.confirm(`¿Restaurar backup de emergencia del ${new Date(emergencyData.timestamp).toLocaleString()}?\n\nRazón: ${emergencyData.reason}\n\nEsto sobreescribirá los datos actuales.`)) {
+        setPlanning(emergencyData.data);
+        showNotification('Backup de emergencia restaurado', 'success');
+        console.log('🚨 Backup de emergencia restaurado');
+      }
+    } else {
+      showNotification('No hay backup de emergencia disponible', 'info');
+    }
+  } catch (error) {
+    console.error('❌ Error restaurando backup de emergencia:', error);
+    showNotification('Error restaurando backup de emergencia', 'error');
+  }
+};
+
+// Hacer funciones disponibles globalmente
+(window as any).restoreEmergencyBackup = restoreEmergencyBackup;
+(window as any).checkEmergencyBackup = checkEmergencyBackup;
+
+// 🔒 FUNCIONES GLOBALES PARA OPTIMISTIC LOCKING
+(window as any).checkSyncStatus = () => {
+  const localTimestamp = localStorage.getItem('server_timestamp');
+  console.log('🔒 Timestamp local:', localTimestamp);
+  console.log('🔒 Última sincronización:', localStorage.getItem('last_sync'));
+  
+  if (!localTimestamp) {
+    console.log('⚠️ No hay timestamp local - posible problema de sincronización');
+    return;
+  }
+  
+  const localDate = new Date(localTimestamp);
+  const now = new Date();
+  const minutesDiff = (now.getTime() - localDate.getTime()) / (1000 * 60);
+  
+  console.log(`🔒 Tiempo desde última sincronización: ${minutesDiff.toFixed(1)} minutos`);
+  
+  if (minutesDiff > 30) {
+    console.warn('⚠️ Hace más de 30 minutos desde la última sincronización - recomendable recargar');
+  }
+};
+
+(window as any).forceSyncReset = () => {
+  if (confirm('¿Estás seguro de que quieres resetear la sincronización? Esto podría causar pérdida de datos si no tienes los cambios más recientes.')) {
+    localStorage.removeItem('server_timestamp');
+    console.log('🔒 Timestamp de sincronización eliminado - se recargará en el próximo guardado');
+    alert('Sincronización reseteada. Recarga la página para obtener datos frescos.');
+  }
+};
+
+// 🗂️ Función para guardar logs en localStorage
+const saveLogToLocalStorage = (logData: any) => {
+  try {
+    const logs = JSON.parse(localStorage.getItem('edge_logs') || '[]');
+    logs.push({
+      ...logData,
+      id: Date.now() + Math.random(), // ID único
+      storedAt: new Date().toISOString()
+    });
+    
+    // Mantener solo últimos 1000 logs para no saturar
+    if (logs.length > 1000) {
+      logs.splice(0, logs.length - 1000);
+    }
+    
+    localStorage.setItem('edge_logs', JSON.stringify(logs));
+    console.log('💾 Log guardado en localStorage:', logs.length, 'registros');
+  } catch (error) {
+    console.error('❌ Error guardando log en localStorage:', error);
+  }
+};
+
+// ☁️ Función para guardar logs en Supabase
+const saveLogToSupabase = async (logData: any) => {
+  try {
+    const { error } = await supabase.from('edge_logs').insert({
+      user_email: logData.userEmail,
+      action: logData.action,
+      log_data: logData,
+      timestamp: logData.timestamp,
+      user_agent: logData.userAgent,
+      data_size: logData.dataSize,
+      workers_count: logData.workers,
+      jobs_count: logData.jobs,
+      clients_count: logData.clients,
+      result: logData.result
+    });
+    
+    if (error) {
+      console.warn('⚠️ Error guardando log en Supabase (continuando con localStorage):', error);
+    } else {
+      console.log('☁️ Log guardado en Supabase correctamente');
+    }
+  } catch (error) {
+    console.warn('⚠️ Error de conexión con Supabase (continuando con localStorage):', error);
+  }
+};
+
+// 📊 Función para exportar logs (para análisis)
+const exportLogs = () => {
+  try {
+    const logs = JSON.parse(localStorage.getItem('edge_logs') || '[]');
+    const blob = new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `edge_logs_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    console.log('📥 Logs exportados:', logs.length, 'registros');
+  } catch (error) {
+    console.error('❌ Error exportando logs:', error);
+  }
+};
+
+// 🧹 Función para limpiar logs antiguos
+const cleanOldLogs = () => {
+  try {
+    const logs = JSON.parse(localStorage.getItem('edge_logs') || '[]');
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const filteredLogs = logs.filter(log => 
+      new Date(log.timestamp) > thirtyDaysAgo
+    );
+    
+    localStorage.setItem('edge_logs', JSON.stringify(filteredLogs));
+    console.log('🧹 Logs limpiados:', logs.length - filteredLogs.length, 'registros eliminados');
+  } catch (error) {
+    console.error('❌ Error limpiando logs:', error);
+  }
+};
+
+// Forzar detección al inicio
+console.log('🔍 SISTEMA DE DETECCIÓN ACTIVADO - Registrando todas las operaciones');
+edgeSpecificLog('SYSTEM START', {
+  userAgent: navigator.userAgent,
+  isEdge: isEdgeBrowser(),
+  timestamp: new Date().toISOString()
+});
+
+// 📥 Hacer función exportLogs disponible globalmente
+(window as any).exportLogs = () => {
+  try {
+    const logs = JSON.parse(localStorage.getItem('edge_logs') || '[]');
+    if (logs.length === 0) {
+      console.log('📊 No hay logs para exportar');
+      alert('No hay logs para exportar. Trabaja un poco más en la aplicación.');
+      return;
+    }
+    
+    const blob = new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `edge_logs_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    console.log(`📥 Logs exportados: ${logs.length} registros`);
+    alert(`Logs exportados: ${logs.length} registros`);
+  } catch (error) {
+    console.error('❌ Error exportando logs:', error);
+    alert('Error exportando logs. Revisa la consola para más detalles.');
+  }
+};
+
+// 🧹 Hacer función cleanLogs disponible globalmente
+(window as any).cleanLogs = () => {
+  try {
+    const logs = JSON.parse(localStorage.getItem('edge_logs') || '[]');
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const filteredLogs = logs.filter(log => 
+      new Date(log.timestamp) > thirtyDaysAgo
+    );
+    
+    localStorage.setItem('edge_logs', JSON.stringify(filteredLogs));
+    const removedCount = logs.length - filteredLogs.length;
+    
+    if (removedCount > 0) {
+      console.log(`🧹 Logs limpiados: ${removedCount} registros eliminados`);
+      alert(`Logs limpiados: ${removedCount} registros eliminados`);
+    } else {
+      console.log('📊 No hay logs antiguos para limpiar');
+      alert('No hay logs antiguos para limpiar');
+    }
+  } catch (error) {
+    console.error('❌ Error limpiando logs:', error);
+    alert('Error limpiando logs. Revisa la consola para más detalles.');
+  }
+};
 
 interface CalendarSelectorProps {
   currentDate: string;
@@ -159,7 +499,10 @@ const App: React.FC = () => {
 
   const [planning, setPlanning] = useState<PlanningState>(defaultState);
   
-  const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving'>('connected');
+  const [dbStatus, setDbStatus] = useState<'loading' | 'connected' | 'error' | 'saving' | 'saved'>('connected');
+  const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+  const [lastAutoBackupTime, setLastAutoBackupTime] = useState<Date | null>(null);
   const [dataRecoveryMode, setDataRecoveryMode] = useState(false);
   const [remoteDataExists, setRemoteDataExists] = useState(false);
   const [advancedRecovery, setAdvancedRecovery] = useState(false);
@@ -172,7 +515,29 @@ const App: React.FC = () => {
       try {
         setDbStatus('loading'); 
         
-        const { data, error } = await supabase.from('planning_snapshots').select('data').eq('id', 1).single();
+        // 🔍 EDGE: Logging específico para carga de datos
+        edgeSpecificLog('DATA LOAD START', {
+          dbStatus: 'loading',
+          timestamp: new Date().toISOString()
+        });
+        
+        // 🚨 Verificar backup de emergencia antes de cargar
+        checkEmergencyBackup();
+        
+        const { data, error } = await supabase.from('planning_snapshots').select('data, updated_at').eq('id', 1).single();
+        
+        if (error) {
+          edgeSpecificLog('DATA LOAD ERROR', { error: error.message });
+          console.error('Error cargando datos:', error);
+          setDbStatus('error');
+          return;
+        }
+        
+        edgeSpecificLog('DATA LOAD RESPONSE', {
+          hasData: !!data,
+          dataSize: data ? JSON.stringify(data).length : 0,
+          error: error?.message
+        });
         
         if (data && data.data && Object.keys(data.data).length > 0) {
           const remoteData = data.data;
@@ -194,6 +559,7 @@ const App: React.FC = () => {
                workers: Array.isArray(remoteData.workers) ? remoteData.workers : defaultState.workers,
                clients: Array.isArray(remoteData.clients) ? remoteData.clients : defaultState.clients,
                jobs: Array.isArray(remoteData.jobs) ? remoteData.jobs : [],
+               fuelRecords: Array.isArray(remoteData.fuelRecords) ? remoteData.fuelRecords : defaultState.fuelRecords,
                vehicles: Array.isArray(remoteData.vehicles) ? remoteData.vehicles : defaultState.vehicles,
                vehicleAssignments: Array.isArray(remoteData.vehicleAssignments) ? remoteData.vehicleAssignments : [],
                standardTasks: Array.isArray(remoteData.standardTasks) ? remoteData.standardTasks : defaultState.standardTasks,
@@ -216,6 +582,17 @@ const App: React.FC = () => {
           setDbStatus('connected');
         }
         
+        // 🔄 OPTIMISTIC LOCKING: Guardar timestamp del servidor
+        console.log('🔒 DIAGNÓSTICO - data object:', data);
+        console.log('🔒 DIAGNÓSTICO - data.updated_at:', data?.updated_at);
+        
+        if (data && data.updated_at) {
+          localStorage.setItem('server_timestamp', data.updated_at);
+          console.log('🔒 Timestamp del servidor guardado:', data.updated_at);
+        } else {
+          console.warn('⚠️ No se pudo guardar timestamp - data o updated_at es nulo');
+        }
+        
         isLoaded.current = true;
 
       } catch (e) {
@@ -223,23 +600,28 @@ const App: React.FC = () => {
         setDbStatus('error');
         isLoaded.current = true; 
       }
+      
+      // 🔍 ACTIVAR DETECCIÓN DE DATOS ANTIGUOS (todos los navegadores)
+      detectStaleData();
+
+      const channel = supabase.channel('planning_sync')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'planning_snapshots', filter: 'id=eq.1' }, (payload) => {
+           if (payload.new && payload.new.data) {
+             isRemoteUpdate.current = true;
+             setPlanning(prev => ({
+               ...payload.new.data,
+               currentDate: prev.currentDate 
+             }));
+           }
+        })
+        .subscribe();
+
+      
+      return () => { supabase.removeChannel(channel); };
     };
-
+    
+    // Llamar a initDb
     initDb();
-
-    const channel = supabase.channel('planning_sync')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'planning_snapshots', filter: 'id=eq.1' }, (payload) => {
-         if (payload.new && payload.new.data) {
-           isRemoteUpdate.current = true;
-           setPlanning(prev => ({
-             ...payload.new.data,
-             currentDate: prev.currentDate 
-           }));
-         }
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
   }, []); 
 
   useEffect(() => {
@@ -252,10 +634,127 @@ const App: React.FC = () => {
     setDbStatus('saving');
     const timer = setTimeout(async () => {
       try {
-        await supabase.from('planning_snapshots').upsert({ id: 1, data: planning, updated_at: new Date() });
-        setDbStatus('connected');
+        // 🚨 Guardar backup de emergencia ANTES de guardar en Supabase
+        saveEmergencyBackup(planning, 'Antes de guardar en Supabase');
+        
+        // 🔍 EDGE: Logging específico para guardado de datos
+        edgeSpecificLog('DATA SAVE START', {
+          dataSize: JSON.stringify(planning).length,
+          workers: planning.workers?.length || 0,
+          jobs: planning.jobs?.length || 0,
+          clients: planning.clients?.length || 0,
+          timestamp: new Date().toISOString()
+        });
+        
+        // 🔒 OPTIMISTIC LOCKING: Verificar que no haya cambios en el servidor
+        const localTimestamp = localStorage.getItem('server_timestamp');
+        console.log('🔒 DIAGNÓSTICO - localTimestamp:', localTimestamp);
+        
+        if (localTimestamp) {
+          console.log('🔒 Verificando timestamp local:', localTimestamp);
+          
+          const { data: currentServerData, error: timestampError } = await supabase
+            .from('planning_snapshots')
+            .select('updated_at')
+            .eq('id', 1)
+            .single();
+          
+          console.log('🔒 DIAGNÓSTICO - currentServerData:', currentServerData);
+          console.log('🔒 DIAGNÓSTICO - timestampError:', timestampError);
+          
+          if (timestampError) {
+            console.error('Error verificando timestamp:', timestampError);
+            showNotification('Error de sincronización verificando datos', 'error');
+            setDbStatus('error');
+            return;
+          }
+          
+          console.log('🔒 Timestamp actual del servidor:', currentServerData.updated_at);
+          
+          // 🔄 NORMALIZAR TIMESTAMPS para comparación (eliminar milisegundos y timezone)
+          const normalizedLocalTimestamp = new Date(localTimestamp).getTime();
+          const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
+          
+          console.log('🔒 Timestamp local normalizado:', normalizedLocalTimestamp);
+          console.log('🔒 Timestamp servidor normalizado:', normalizedServerTimestamp);
+          
+          // 🚨 CONFLICTO DETECTADO: Los datos en el servidor son más recientes (diferencia > 5 segundos)
+          const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
+          console.log('🔒 Diferencia de tiempo (ms):', timeDifference);
+          
+          if (timeDifference > 5000) { // 5 segundos de tolerancia
+            console.warn('🚨 CONFLICTO DE SINCRONIZACIÓN DETECTADO');
+            edgeSpecificLog('SYNC CONFLICT DETECTED', {
+              localTimestamp,
+              serverTimestamp: currentServerData.updated_at,
+              timeDifference,
+              timestamp: new Date().toISOString()
+            });
+            
+            showNotification(
+              '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página para obtener los cambios más recientes.', 
+              'error'
+            );
+            setDbStatus('error');
+            return;
+          }
+          
+          console.log('✅ Timestamp verificado - Sin conflictos');
+        } else {
+          console.warn('⚠️ No hay timestamp local - omitiendo verificación de Optimistic Locking');
+        }
+        
+        const { data, error } = await supabase
+          .from('planning_snapshots')
+          .upsert({ id: 1, data: planning, updated_at: new Date() })
+          .select();
+
+        if (error) {
+          edgeSpecificLog('DATA SAVE ERROR', { 
+            error: error.message,
+            errorDetails: error,
+            timestamp: new Date().toISOString()
+          });
+          console.error('Error de Supabase:', error);
+          
+          // Detectar errores de autenticación
+          if (error.message?.includes('JWT') || error.message?.includes('token') || error.code === 'PGRST301') {
+            showNotification('Error de autenticación. Por favor, inicia sesión nuevamente.', 'error');
+            setDbStatus('error');
+            // Opcional: redirigir al login
+            // handleLogout();
+          } else {
+            showNotification('Error al guardar en la base de datos', 'error');
+            setDbStatus('error');
+          }
+        } else {
+          edgeSpecificLog('DATA SAVE SUCCESS', {
+            dataSize: JSON.stringify(planning).length,
+            timestamp: new Date().toISOString(),
+            serverResponse: data
+          });
+          
+          setDbStatus('saved');
+          setLastSavedTime(new Date());
+          
+          // 🔄 OPTIMISTIC LOCKING: Actualizar timestamp local después de guardar exitosamente
+          const newTimestamp = new Date().toISOString();
+          localStorage.setItem('server_timestamp', newTimestamp);
+          console.log('🔒 Timestamp actualizado después de guardar:', newTimestamp);
+          
+          // Guardar timestamp de última sincronización para Edge
+          if (isEdgeBrowser()) {
+            localStorage.setItem('last_sync', newTimestamp);
+          }
+          // Volver a 'connected' después de 2 segundos
+          setTimeout(() => {
+            setDbStatus('connected');
+          }, 2000);
+        }
       } catch (e) {
-        setDbStatus('error'); 
+        console.error('Error general al guardar:', e);
+        showNotification('Error de conexión al guardar datos', 'error');
+        setDbStatus('error');
       }
     }, 1000); 
 
@@ -267,17 +766,49 @@ const App: React.FC = () => {
     if (!planning.workers.length) return;
 
     const today = new Date().toISOString().split('T')[0];
-    const workersNeedingUpdate = planning.workers.filter(worker => 
-      worker.status !== WorkerStatus.DISPONIBLE && 
-      worker.statusEndDate && 
-      worker.statusEndDate < today
-    );
+    const workersNeedingUpdate = planning.workers.filter(worker => {
+      // Solo actualizar si el estado no es DISPONIBLE y tiene fechas definidas
+      if (worker.status === WorkerStatus.DISPONIBLE || !worker.statusStartDate || !worker.statusEndDate) return false;
+      
+      // Lógica correcta:
+      // 1. Si hoy < statusStartDate: El estado futuro no debe activarse todavía
+      // 2. Si hoy >= statusStartDate y hoy <= statusEndDate: El estado debe estar activo
+      // 3. Si hoy > statusEndDate: El estado debe volver a DISPONIBLE
+      
+      const todayDate = new Date(today);
+      const startDate = new Date(worker.statusStartDate);
+      const endDate = new Date(worker.statusEndDate);
+      
+      // Si hoy es posterior a la fecha de fin, cambiar a DISPONIBLE
+      return todayDate > endDate;
+    });
 
     if (workersNeedingUpdate.length > 0) {
+      console.log('Actualizando operarios automáticamente:', workersNeedingUpdate.map(w => `${w.name} (${w.status} -> DISPONIBLE)`));
+      
       setPlanning(prev => ({
         ...prev,
         workers: prev.workers.map(worker => {
           if (workersNeedingUpdate.some(w => w.id === worker.id)) {
+            // Crear registro del cambio de estado
+            const statusRecord = {
+              id: Date.now() + Math.random(), // ID único
+              workerId: worker.id,
+              workerName: worker.name,
+              workerCode: worker.code,
+              previousStatus: worker.status,
+              newStatus: WorkerStatus.DISPONIBLE,
+              statusStartDate: worker.statusStartDate,
+              statusEndDate: worker.statusEndDate,
+              changeDate: new Date().toISOString(),
+              changeReason: 'Estado expirado automáticamente'
+            };
+            
+            // Guardar en localStorage como registro histórico
+            const existingRecords = JSON.parse(localStorage.getItem('workerStatusRecords') || '[]');
+            existingRecords.push(statusRecord);
+            localStorage.setItem('workerStatusRecords', JSON.stringify(existingRecords));
+            
             return {
               ...worker,
               status: WorkerStatus.DISPONIBLE,
@@ -289,14 +820,55 @@ const App: React.FC = () => {
         })
       }));
 
-      // Mostrar notificación sobre los cambios automáticos
-      const workerNames = workersNeedingUpdate.map(w => w.name).join(', ');
-      showNotification(
-        `${workersNeedingUpdate.length} operario(s) cambiado(s) a Disponible automáticamente: ${workerNames}`,
-        'info'
-      );
+      // No mostrar notificación automática para evitar spam
+      console.log('Actualizando operarios automáticamente:', workersNeedingUpdate.map(w => `${w.name} (${w.status} -> DISPONIBLE)`));
     }
   }, [planning.currentDate, planning.workers]); 
+
+  // useEffect adicional para verificar estados cada minuto y activar estados futuros
+  useEffect(() => {
+    if (!planning.workers.length) return;
+
+    const checkStatuses = () => {
+      const today = new Date().toISOString().split('T')[0];
+      const todayDate = new Date(today);
+      
+      // 1. Buscar operarios que deben volver a DISPONIBLE (fechas pasadas)
+      const workersNeedingUpdate = planning.workers.filter(worker => {
+        if (worker.status === WorkerStatus.DISPONIBLE || !worker.statusStartDate || !worker.statusEndDate) return false;
+        const endDate = new Date(worker.statusEndDate);
+        return todayDate > endDate;
+      });
+
+      // 2. Buscar operarios que deben activar su estado (hoy >= fecha inicio)
+      const workersNeedingActivation = planning.workers.filter(worker => {
+        if (worker.status === WorkerStatus.DISPONIBLE || !worker.statusStartDate || !worker.statusEndDate) return false;
+        const startDate = new Date(worker.statusStartDate);
+        const endDate = new Date(worker.statusEndDate);
+        return todayDate >= startDate && todayDate <= endDate;
+      });
+
+      // Procesar actualizaciones (volver a DISPONIBLE)
+      if (workersNeedingUpdate.length > 0) {
+        // No mostrar notificación para evitar spam
+        console.log('Verificación periódica: Actualizando operarios a DISPONIBLE:', workersNeedingUpdate.map(w => w.name));
+      }
+
+      // Procesar activaciones (cambiar a estado programado)
+      if (workersNeedingActivation.length > 0) {
+        console.log('Verificación periódica: Activando estados programados:', workersNeedingActivation.map(w => w.name));
+        // No mostrar notificación para evitar spam
+      }
+    };
+
+    // Ejecutar inmediatamente al cargar
+    checkStatuses();
+    
+    // Configurar verificación cada minuto
+    const interval = setInterval(checkStatuses, 60000);
+    
+    return () => clearInterval(interval);
+  }, [planning.workers.length]); 
 
 
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -325,6 +897,8 @@ const App: React.FC = () => {
   const [workerListModal, setWorkerListModal] = useState<{clientId: string, centerId: string, date: string} | null>(null);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
+  const [editingStatusRecord, setEditingStatusRecord] = useState<{id?: string, status: WorkerStatus, startDate: string, endDate: string} | null>(null);
+  const [showAddRecordForm, setShowAddRecordForm] = useState(false);
   const [duplicatingJob, setDuplicatingJob] = useState<Job | null>(null);
   const [duplicationDate, setDuplicationDate] = useState<string>('');
   const [keepWorkersOnDuplicate, setKeepWorkersOnDuplicate] = useState(false);
@@ -347,6 +921,198 @@ const App: React.FC = () => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
+
+  // Función para guardar manualmente con notificación de éxito
+  const saveToSupabase = useCallback(async (showSuccessNotification = false) => {
+    try {
+      setDbStatus('saving');
+      
+      // 🔒 OPTIMISTIC LOCKING: Verificar antes de guardar manualmente
+      const localTimestamp = localStorage.getItem('server_timestamp');
+      if (localTimestamp) {
+        const { data: currentServerData, error: timestampError } = await supabase
+          .from('planning_snapshots')
+          .select('updated_at')
+          .eq('id', 1)
+          .single();
+        
+        if (timestampError) {
+          console.error('Error verificando timestamp:', timestampError);
+          showNotification('Error de sincronización verificando datos', 'error');
+          setDbStatus('error');
+          return false;
+        }
+        
+        if (currentServerData.updated_at !== localTimestamp) {
+          // 🔄 NORMALIZAR TIMESTAMPS para comparación
+          const normalizedLocalTimestamp = new Date(localTimestamp).getTime();
+          const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
+          const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
+          
+          if (timeDifference > 5000) { // 5 segundos de tolerancia
+            showNotification(
+              '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página primero.', 
+              'error'
+            );
+            setDbStatus('error');
+            return false;
+          }
+        }
+      }
+      
+      const { data, error } = await supabase
+        .from('planning_snapshots')
+        .upsert({ id: 1, data: planning, updated_at: new Date() })
+        .select();
+      
+      // 🔒 Actualizar timestamp después de guardar exitosamente
+      if (!error) {
+        const newTimestamp = new Date().toISOString();
+        localStorage.setItem('server_timestamp', newTimestamp);
+      }
+
+      if (error) {
+        console.error('Error de Supabase:', error);
+        
+        // Detectar errores de autenticación
+        if (error.message?.includes('JWT') || error.message?.includes('token') || error.code === 'PGRST301') {
+          showNotification('Error de autenticación. Por favor, inicia sesión nuevamente.', 'error');
+          setDbStatus('error');
+          return false;
+        } else {
+          showNotification('Error al guardar en la base de datos', 'error');
+          setDbStatus('error');
+          return false;
+        }
+      } else {
+        setDbStatus('saved');
+        setLastSavedTime(new Date());
+        if (showSuccessNotification) {
+          showNotification('Guardado exitosamente', 'success');
+        }
+        // Volver a 'connected' después de 2 segundos
+        setTimeout(() => {
+          setDbStatus('connected');
+        }, 2000);
+        return true;
+      }
+    } catch (e) {
+      console.error('Error general al guardar:', e);
+      showNotification('Error de conexión al guardar datos', 'error');
+      setDbStatus('error');
+      return false;
+    }
+  }, [planning, showNotification]);
+
+  // Función de backup automático programado
+  const performAutoBackup = useCallback(() => {
+    if (!autoBackupEnabled) return;
+    
+    const now = new Date();
+    
+    // 🔍 DIAGNÓSTICO: Verificar estado de los datos antes del backup automático
+    console.log('🔍 BACKUP AUTOMÁTICO - DIAGNÓSTICO:');
+    console.log('- Workers:', planning.workers?.length || 0);
+    console.log('- Jobs:', planning.jobs?.length || 0);
+    console.log('- Clients:', planning.clients?.length || 0);
+    console.log('- Timestamp:', now.toISOString());
+    
+    // 🚨 VERIFICACIÓN: Si los datos están vacíos, no hacer backup
+    if (!planning.workers || planning.workers.length === 0) {
+      console.warn('⚠️ BACKUP AUTOMÁTICO CANCELADO - No hay workers cargados');
+      return;
+    }
+    
+    // Ejecutar durante las 24 horas del día
+    try {
+      const dataStr = JSON.stringify(planning, null, 2);
+      const dataSizeKB = Math.round(dataStr.length / 1024);
+      
+      console.log('🔍 BACKUP AUTOMÁTICO - Tamaño:', dataSizeKB, 'KB');
+      
+      // 🚨 ALERTA si el tamaño es sospechosamente pequeño
+      if (dataSizeKB < 10) {
+        console.warn('⚠️ BACKUP AUTOMÁTICO DEMASIADO PEQUEÑO - Cancelando descarga');
+        console.log('🔍 Contenido:', dataStr.substring(0, 500));
+        return;
+      }
+      
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Nombre con timestamp completo
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+      link.download = `backup_${dateStr}_${timeStr}.json`;
+      
+      // Simular clic para descargar
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      // Notificación de éxito
+      console.log(`✅ Backup automático completado: ${dataSizeKB}KB`);
+      showNotification(`Backup automático creado: ${timeStr}`, 'success');
+      setLastAutoBackupTime(now);
+      
+    } catch (error) {
+      console.error('❌ Error en backup automático:', error);
+      showNotification('Error en backup automático', 'error');
+    }
+  }, [autoBackupEnabled, planning, showNotification]);
+
+  // Timer para backup automático cada hora (24h)
+  useEffect(() => {
+    if (!autoBackupEnabled) return;
+    
+    // Configurar timer para ejecutar cada hora (sin ejecutar al iniciar)
+    const interval = setInterval(() => {
+      performAutoBackup();
+    }, 60 * 60 * 1000); // 1 hora en milisegundos
+    
+    return () => clearInterval(interval);
+  }, [autoBackupEnabled, performAutoBackup]);
+
+  // Backup al cerrar la página
+  useEffect(() => {
+    if (!autoBackupEnabled) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Ejecutar backup final al cerrar
+      try {
+        const dataStr = JSON.stringify(planning, null, 2);
+        const blob = new Blob([dataStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        
+        // Nombre con timestamp para el backup de cierre
+        const now = new Date();
+        const dateStr = now.toISOString().split('T')[0];
+        const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+        link.download = `backup_cierre_${dateStr}_${timeStr}.json`;
+        
+        // Simular clic para descargar
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        console.log(`Backup de cierre creado: backup_cierre_${dateStr}_${timeStr}.json`);
+      } catch (error) {
+        console.error('Error en backup de cierre:', error);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [autoBackupEnabled, planning]);
 
   const handleDragStart = (worker: Worker) => setDraggedWorkerId(worker.id);
   
@@ -522,7 +1288,7 @@ const App: React.FC = () => {
       try {
         console.log(`Copiando lista ${type}:`, list); // Debug
         const title = type === 'altas' ? `ALTAS ${formatDateDMY(planning.currentDate)}` : `BAJAS ${formatDateDMY(planning.currentDate)}`;
-        const content = list.map(w => `${w.name} - ${w.dni}`).join('\n');
+        const content = list.map(w => getWorkerSSFormat(w)).join('\n');
         const fullText = `${title}\n\n${content}`;
         
         console.log('Texto a copiar:', fullText); // Debug
@@ -597,8 +1363,146 @@ const App: React.FC = () => {
     }));
   };
 
+  // Función para determinar el estado correcto según las fechas (ahora usa registros)
+  const getCorrectWorkerStatus = (worker: Worker): WorkerStatus => {
+    // Usar la nueva lógica basada en registros
+    return getCurrentWorkerStatus(worker).status;
+  };
+
   const handleUpdateWorkerStatus = (workerId: string, status: WorkerStatus) => {
     setPlanning(prev => ({ ...prev, workers: prev.workers.map(w => w.id === workerId ? { ...w, status } : w) }));
+  };
+
+  // Funciones para manejar registros de estados
+  const handleAddStatusRecord = () => {
+    if (!editingWorker || !editingStatusRecord) {
+      return;
+    }
+    
+    // Validación básica
+    if (!editingStatusRecord.startDate) {
+      showNotification("Debes seleccionar una fecha de inicio", "error");
+      return;
+    }
+    
+    if (!editingStatusRecord.endDate || editingStatusRecord.endDate === '') {
+      showNotification("Debes seleccionar una fecha de fin o marcar como IND.", "error");
+      return;
+    }
+
+    const updatedWorker = addOrUpdateStatusRecord(
+      editingWorker,
+      editingStatusRecord.status,
+      editingStatusRecord.startDate,
+      editingStatusRecord.endDate
+    );
+
+    // Calcular y actualizar el estado actual basado en los registros
+    const currentStatus = getCurrentWorkerStatus(updatedWorker);
+    
+    const finalWorker = {
+      ...updatedWorker,
+      status: currentStatus.status,
+      statusStartDate: currentStatus.startDate,
+      statusEndDate: currentStatus.endDate
+    };
+
+    setEditingWorker(finalWorker);
+    
+    // También actualizar la lista principal de workers
+    setPlanning(prev => ({
+      ...prev,
+      workers: prev.workers.map(w => w.id === finalWorker.id ? finalWorker : w)
+    }));
+    
+    setEditingStatusRecord(null);
+    setShowAddRecordForm(false);
+    showNotification("Registro de estado añadido", "success");
+  };
+
+  const handleEditStatusRecord = (recordId: string) => {
+    if (!editingWorker?.statusRecords) return;
+    
+    const record = editingWorker.statusRecords.find(r => r.id === recordId);
+    if (record) {
+      setEditingStatusRecord({
+        id: record.id,
+        status: record.status,
+        startDate: record.startDate,
+        endDate: record.endDate || 'IND.'
+      });
+      setShowAddRecordForm(true);
+    }
+  };
+
+  const handleDeleteStatusRecord = (recordId: string) => {
+    if (!editingWorker) return;
+    
+    if (confirm("¿Estás seguro de que quieres eliminar este registro?")) {
+      const updatedWorker = removeStatusRecord(editingWorker, recordId);
+      
+      // Recalcular el estado actual después de eliminar
+      const currentStatus = getCurrentWorkerStatus(updatedWorker);
+      
+      const finalWorker = {
+        ...updatedWorker,
+        status: currentStatus.status,
+        statusStartDate: currentStatus.startDate,
+        statusEndDate: currentStatus.endDate
+      };
+      
+      setEditingWorker(finalWorker);
+      
+      // También actualizar la lista principal de workers
+      setPlanning(prev => ({
+        ...prev,
+        workers: prev.workers.map(w => w.id === finalWorker.id ? finalWorker : w)
+      }));
+      
+      showNotification("Registro eliminado", "success");
+    }
+  };
+
+  // Función manual para verificar y actualizar estados de operarios
+  const handleCheckWorkerStatuses = () => {
+    if (!planning.workers.length) {
+      showNotification("No hay operarios para verificar", "warning");
+      return;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const workersNeedingUpdate = planning.workers.filter(worker => 
+      worker.status !== WorkerStatus.DISPONIBLE && 
+      worker.statusEndDate && 
+      worker.statusEndDate < today
+    );
+
+    if (workersNeedingUpdate.length > 0) {
+      console.log('Verificación manual: Actualizando operarios:', workersNeedingUpdate.map(w => `${w.name} (${w.status} -> DISPONIBLE)`));
+      
+      setPlanning(prev => ({
+        ...prev,
+        workers: prev.workers.map(worker => {
+          if (workersNeedingUpdate.some(w => w.id === worker.id)) {
+            return {
+              ...worker,
+              status: WorkerStatus.DISPONIBLE,
+              statusStartDate: undefined,
+              statusEndDate: undefined
+            };
+          }
+          return worker;
+        })
+      }));
+
+      const workerNames = workersNeedingUpdate.map(w => getWorkerDisplayName(w)).join(', ');
+      showNotification(
+        `Verificación completada: ${workersNeedingUpdate.length} operario(s) cambiado(s) a Disponible: ${workerNames}`,
+        'success'
+      );
+    } else {
+      showNotification("Todos los operarios tienen el estado correcto", "success");
+    }
   };
 
   const handleReorderJobs = (sourceJobId: string, targetJobId: string) => {
@@ -657,6 +1561,7 @@ const App: React.FC = () => {
       ...duplicatingJob,
       id: `j-copy-${Date.now()}`,
       date: duplicationDate,
+      deliveryNote: '', // No duplicar el albarán
       isCancelled: false, cancellationReason: '', isFinished: false, actualEndTime: undefined,
       assignedWorkerIds: keepWorkersOnDuplicate ? duplicatingJob.assignedWorkerIds : [],
       workerTimes: keepWorkersOnDuplicate ? { ...duplicatingJob.workerTimes } : {}
@@ -682,9 +1587,10 @@ const App: React.FC = () => {
           id: `w-${Date.now()}`,
           code: '',
           name: '',
+          apodo: undefined,
           dni: '',
           phone: '',
-          role: 'Mozo almacén',
+          role: 'Mozo Almacén',
           status: WorkerStatus.DISPONIBLE, // Asegurado que sea Disponible por defecto
           contractType: ContractType.FIJO_DISCONTINUO,
           hasVehicle: false,
@@ -785,6 +1691,21 @@ const App: React.FC = () => {
     }));
     setEditingStandardTask(null);
     showNotification("Tarea eliminada", "success");
+  };
+
+  // Función para limpiar todas las plantillas rápidas (standardTasks)
+  const clearAllStandardTasks = () => {
+    const taskCount = planning.standardTasks.length;
+    if (taskCount === 0) {
+      showNotification("No hay plantillas rápidas para eliminar", "info");
+      return;
+    }
+    
+    setPlanning(prev => ({
+      ...prev,
+      standardTasks: []
+    }));
+    showNotification(`Se eliminaron ${taskCount} plantillas rápidas`, "success");
   };
 
   const handleAddGlobalCourse = () => {
@@ -895,13 +1816,58 @@ const App: React.FC = () => {
   };
 
   const exportBackup = () => {
+      // 🔍 DIAGNÓSTICO: Verificar qué contiene planning antes de exportar
+      console.log('🔍 DIAGNÓSTICO DE BACKUP:');
+      console.log('- Workers:', planning.workers?.length || 0);
+      console.log('- Jobs:', planning.jobs?.length || 0);
+      console.log('- Clients:', planning.clients?.length || 0);
+      console.log('- Vehicles:', planning.vehicles?.length || 0);
+      console.log('- Courses:', planning.courses?.length || 0);
+      console.log('- StandardTasks:', planning.standardTasks?.length || 0);
+      
+      // 🔄 USAR DATOS COMPLETOS en lugar de cleanedPlanning para backup completo
+      const dataStr = JSON.stringify(planning, null, 2);
+      const dataSizeKB = Math.round(dataStr.length / 1024);
+      
+      console.log('🔍 Tamaño real del backup:', dataSizeKB, 'KB');
+      console.log('🔍 Longitud del string:', dataStr.length, 'caracteres');
+      
+      // 🚨 ALERTA si el tamaño es sospechosamente pequeño
+      if (dataSizeKB < 10) {
+        console.warn('⚠️ BACKUP DEMASIADO PEQUEÑO - Posible problema de datos');
+        console.log('🔍 Primeros 1000 caracteres del backup:', dataStr.substring(0, 1000));
+      }
+      
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      // Crear nombre de archivo con fecha y hora
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS
+      link.download = `backup_completo_${dateStr}_${timeStr}.json`;
+      link.click();
+      
+      // Mostrar información del backup
+      showNotification(`Backup completo exportado: ${dataSizeKB}KB`, 'success');
+  };
+
+  // 📊 Nueva función para backup limpio (si se necesita)
+  const exportCleanBackup = () => {
       const dataStr = JSON.stringify(cleanedPlanning, null, 2);
       const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `backup_${cleanedPlanning.currentDate}.json`;
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+      link.download = `backup_limpio_${dateStr}_${timeStr}.json`;
       link.click();
+      
+      const dataSizeKB = Math.round(dataStr.length / 1024);
+      showNotification(`Backup limpio exportado: ${dataSizeKB}KB`, 'success');
   };
   const exportDatabaseToExcel = () => showNotification("Función de exportación completa disponible", "info"); 
   const downloadExcelTemplate = () => showNotification("Plantilla descargada", "info");
@@ -930,12 +1896,41 @@ const App: React.FC = () => {
           currentDate: new Date().toISOString().split('T')[0]
         };
         
+        // 🔒 OPTIMISTIC LOCKING: Verificar antes de importar
+        const localTimestamp = localStorage.getItem('server_timestamp');
+        if (localTimestamp) {
+          const { data: currentServerData, error: timestampError } = await supabase
+            .from('planning_snapshots')
+            .select('updated_at')
+            .eq('id', 1)
+            .single();
+          
+          if (!timestampError && currentServerData.updated_at !== localTimestamp) {
+            // 🔄 NORMALIZAR TIMESTAMPS para comparación
+            const normalizedLocalTimestamp = new Date(localTimestamp).getTime();
+            const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
+            const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
+            
+            if (timeDifference > 5000) { // 5 segundos de tolerancia
+              showNotification(
+                '❌ Error de sincronización durante importación: Otro usuario ha modificado los datos. Recarga la página primero.', 
+                'error'
+              );
+              return;
+            }
+          }
+        }
+        
         setPlanning(cleanedImported);
         await supabase.from('planning_snapshots').upsert({ 
           id: 1, 
           data: cleanedImported, 
           updated_at: new Date() 
         });
+        
+        // 🔒 Actualizar timestamp después de importación
+        const newTimestamp = new Date().toISOString();
+        localStorage.setItem('server_timestamp', newTimestamp);
         
         showNotification("¡Datos importados y guardados correctamente!", "success");
       } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
@@ -1017,13 +2012,13 @@ const App: React.FC = () => {
     };
   };
 
-  const cleanedPlanning = useMemo(() => cleanupOldData(planning), [planning, cleanupOldData]);
+  const cleanedPlanning = useMemo(() => cleanupOldData(planning), [planning]);
 
   const filteredWorkersTable = useMemo(() => {
   let workers = cleanedPlanning.workers.filter(w => !showArchivedWorkers ? !w.isArchived : true);
   
   // Filtrar por búsqueda
-  workers = workers.filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase()));
+  workers = workers.filter(w => w.name.toLowerCase().includes(workerTableSearch.toLowerCase()) || (w.apodo && w.apodo.toLowerCase().includes(workerTableSearch.toLowerCase())));
   
   // Filtrar por disponibilidad (libres/asignados)
   if (workerAvailabilityFilter !== 'all') {
@@ -1050,6 +2045,9 @@ const App: React.FC = () => {
   const activeStatusFilters = Object.keys(workerStatusFilter).filter(key => workerStatusFilter[key]);
   if (activeStatusFilters.length > 0) {
     workers = workers.filter(w => {
+      // Usar el estado correcto según las fechas
+      const correctStatus = getCorrectWorkerStatus(w);
+      
       // Mapear las claves del filtro a los valores del enum
       const statusMapping: {[key: string]: string} = {
         'DISPONIBLE': 'Disponible',
@@ -1057,7 +2055,7 @@ const App: React.FC = () => {
         'BAJA_MEDICA': 'Baja Médica',
         'BAJA_PATERNIDAD': 'Baja Paternidad'
       };
-      return activeStatusFilters.some(filterKey => w.status === statusMapping[filterKey]);
+      return activeStatusFilters.some(filterKey => correctStatus === statusMapping[filterKey]);
     });
   } else {
     // Si no hay ningún filtro activo, no mostrar ningún operario
@@ -1267,12 +2265,41 @@ const App: React.FC = () => {
         setAdvancedRecovery(false);
         showNotification(`¡DATOS RECUPERADOS! Fuente: ${bestSource}`, "success");
         
+        // 🔒 OPTIMISTIC LOCKING: Verificar antes de restaurar
+        const localTimestamp = localStorage.getItem('server_timestamp');
+        if (localTimestamp) {
+          const { data: currentServerData, error: timestampError } = await supabase
+            .from('planning_snapshots')
+            .select('updated_at')
+            .eq('id', 1)
+            .single();
+          
+          if (!timestampError && currentServerData.updated_at !== localTimestamp) {
+            // 🔄 NORMALIZAR TIMESTAMPS para comparación
+            const normalizedLocalTimestamp = new Date(localTimestamp).getTime();
+            const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
+            const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
+            
+            if (timeDifference > 5000) { // 5 segundos de tolerancia
+              showNotification(
+                '❌ Error de sincronización durante recuperación: Otro usuario ha modificado los datos. Recarga la página primero.', 
+                'error'
+              );
+              return;
+            }
+          }
+        }
+        
         // Restaurar los datos recuperados a Supabase
         await supabase.from('planning_snapshots').upsert({ 
           id: 1, 
           data: mergedState, 
           updated_at: new Date() 
         });
+        
+        // 🔒 Actualizar timestamp después de recuperación
+        const newTimestamp = new Date().toISOString();
+        localStorage.setItem('server_timestamp', newTimestamp);
         
       } else {
         showNotification("No se encontraron datos en ningún backup", "error");
@@ -1297,17 +2324,13 @@ const App: React.FC = () => {
       <input type="file" ref={backupInputRef} className="hidden" accept=".json,.xlsx,.xls" onChange={importData} />
       
       {notification && (
-        <div className={`fixed top-4 right-4 z-50 max-w-sm p-4 rounded-xl shadow-lg border transform transition-all duration-300 ${
-          notification.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' :
-          notification.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' :
-          notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' :
-          'bg-blue-50 border-blue-200 text-blue-800'
+        <div className={`fixed top-4 right-4 z-[1000] px-6 py-4 rounded-xl shadow-lg border max-w-md animate-in slide-in-from-right duration-200 ${
+          notification.type === 'error' ? 'bg-red-50 border-red-200 text-red-900' :
+          notification.type === 'success' ? 'bg-green-50 border-green-200 text-green-900' :
+          notification.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-900' :
+          'bg-blue-50 border-blue-200 text-blue-900'
         }`}>
-          <div className="flex items-start gap-3">
-            {notification.type === 'success' && <CheckCircle className="w-5 h-5 flex-shrink-0" />}
-            {notification.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
-            {notification.type === 'error' && <XCircle className="w-5 h-5 flex-shrink-0" />}
-            {notification.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
+          <div className="flex items-start justify-between gap-4">
             <div>
               <p className="font-bold text-sm">{notification.message}</p>
             </div>
@@ -1387,12 +2410,35 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <div className={`fixed bottom-4 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all ${dbStatus === 'connected' ? 'bg-green-50 text-green-600 border-green-100' : dbStatus === 'saving' ? 'bg-blue-50 text-blue-600 border-blue-100' : dbStatus === 'loading' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
-         {dbStatus === 'connected' && <><Cloud className="w-3 h-3" /> Conectado</>}
+      <div 
+        className={`fixed bottom-4 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all cursor-pointer ${
+          dbStatus === 'connected' ? 'bg-green-50 text-green-600 border-green-100 hover:bg-green-100' : 
+          dbStatus === 'saving' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
+          dbStatus === 'loading' ? 'bg-amber-50 text-amber-600 border-amber-100' : 
+          dbStatus === 'saved' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
+          'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
+        }`}
+        onClick={() => {
+          if (dbStatus === 'connected' || dbStatus === 'error') {
+            saveToSupabase(true); // Guardar manualmente con notificación de éxito
+          }
+        }}
+        title={dbStatus === 'connected' || dbStatus === 'error' ? 'Clic para guardar manualmente' : undefined}
+      >
+         {dbStatus === 'connected' && <><Cloud className="w-3 h-3" /> {lastSavedTime ? `Guardado ${lastSavedTime.toLocaleTimeString()}` : 'Conectado'}</>}
          {dbStatus === 'saving' && <><RotateCcw className="w-3 h-3 animate-spin" /> Guardando...</>}
          {dbStatus === 'loading' && <><Loader2 className="w-3 h-3 animate-spin" /> Cargando...</>}
-         {dbStatus === 'error' && <><CloudOff className="w-3 h-3" /> Sin conexión (Local)</>}
+         {dbStatus === 'saved' && <><CheckCircle2 className="w-3 h-3" /> Guardado</>}
+         {dbStatus === 'error' && <><CloudOff className="w-3 h-3" /> Sin conexión (Clic para reintentar)</>}
       </div>
+
+      {/* Indicador de Backup Automático - Arriba */}
+      {autoBackupEnabled && (
+        <div className="fixed bottom-16 left-4 z-[400] px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm transition-all bg-amber-50 text-amber-600 border-amber-100">
+          <DownloadCloud className="w-3 h-3" />
+          {lastAutoBackupTime ? `Auto ${lastAutoBackupTime.toLocaleTimeString()}` : 'Auto activo'}
+        </div>
+      )}
 
       {/* SIDEBAR NAVIGATION */}
       <aside className="w-20 bg-slate-900 flex flex-col items-center py-8 gap-8 shrink-0 z-50 shadow-2xl">
@@ -1406,10 +2452,9 @@ const App: React.FC = () => {
             <button onClick={() => setView('databases')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'databases' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Bases de Datos"><Database className="w-6 h-6" /></button>
             <button onClick={() => setView('fleet')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'fleet' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión de Flota"><Car className="w-6 h-6" /></button>
             <button onClick={() => setView('stats')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'stats' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Estadísticas"><BarChart3 className="w-6 h-6" /></button>
+            <button onClick={() => setShowBackupModal(true)} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'backup' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Copias de Seguridad"><DownloadCloud className="w-4 h-4" /></button>
+            <button onClick={exportBackup} className="p-3 rounded-xl transition-all flex justify-center text-slate-400 hover:bg-slate-800 hover:text-white" title="Backup Rápido"><Download className="w-4 h-4" /></button>
          </nav>
-         <div className="flex flex-col gap-4 w-full px-3">
-            <button onClick={() => setShowBackupModal(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Base de Datos"><DownloadCloud className="w-4 h-4" /></button>
-         </div>
       </aside>
 
       <div className="flex-1 flex overflow-hidden relative">
@@ -1421,6 +2466,7 @@ const App: React.FC = () => {
              onSelectWorker={setSelectedWorkerId}
              onUpdateWorkerStatus={handleUpdateWorkerStatus}
              onDragStart={handleDragStart}
+             getCorrectWorkerStatus={getCorrectWorkerStatus}
            />
          )}
 
@@ -1491,7 +2537,17 @@ const App: React.FC = () => {
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
                <h2 className="text-2xl font-black text-slate-900 italic uppercase">Gestión de Operarios</h2>
-               <button onClick={handleOpenNewWorker} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Operario</button>
+               <div className="flex items-center gap-3">
+                 <button 
+                   onClick={handleCheckWorkerStatuses}
+                   className="bg-amber-600 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest flex items-center gap-2 hover:bg-amber-700 transition-colors"
+                   title="Verificar y actualizar estados automáticamente"
+                 >
+                   <CheckCircle2 className="w-4 h-4" />
+                   Verificar Estados
+                 </button>
+                 <button onClick={handleOpenNewWorker} className="bg-slate-900 text-white px-6 py-4 rounded-[24px] font-black text-[12px] uppercase tracking-widest">+ Nuevo Operario</button>
+               </div>
              </div>
              <div className="bg-white rounded-[32px] border border-slate-200 p-6 shadow-sm mb-6">
                 <div className="flex items-center gap-4 mb-4">
@@ -1713,12 +2769,14 @@ const App: React.FC = () => {
                  <thead className="bg-slate-100 border-b border-slate-200 sticky top-0 z-10">
                    <tr>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-24">Código</th>
-                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Operario</th>
-                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">DNI</th>
-                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Teléfono</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-60">Nombre</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-80">Apellidos</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-24">DNI</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-24">Teléfono</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Vehículo</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Estado</th>
-                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Hasta</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-40">Cambio Estado</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-40">Hasta</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right">Editar</th>
                    </tr>
                  </thead>
@@ -1735,32 +2793,87 @@ const App: React.FC = () => {
 
                      return (
                      <tr key={w.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-3">
                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-[10px] border ${codeClass}`}>
                               {w.code}
                            </div>
                         </td>
-                        <td className="px-6 py-4">
-                           <p className="font-black text-slate-900 text-sm">{w.name}</p>
+                        <td className="px-6 py-3">
+                           <p className="font-black text-slate-900 text-sm">
+                             {w.firstName || w.name?.split(' ')[0] || w.name}
+                           </p>
                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">{w.role}</p>
                         </td>
-                        <td className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">{w.dni}</td>
-                        <td className="px-6 py-4 text-xs font-bold text-slate-500">{w.phone}</td>
-                        <td className="px-6 py-4 text-center">
+                        <td className="px-6 py-3">
+                           <p className="font-black text-slate-900 text-sm">
+                             {w.lastName || (() => {
+                               const parts = w.name?.split(' ');
+                               return parts && parts.length > 1 ? parts.slice(1).join(' ') : '';
+                             })() || '-'}
+                           </p>
+                        </td>
+                        <td className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">{w.dni}</td>
+                        <td className="px-6 py-3 text-xs font-bold text-slate-500">{w.phone}</td>
+                        <td className="px-6 py-3 text-center">
                            {w.hasVehicle ? <Car className="w-4 h-4 text-green-500 mx-auto" /> : <span className="text-slate-300">-</span>}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-3">
                            <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${
-                              w.status === WorkerStatus.DISPONIBLE ? 'bg-green-100 text-green-700' : 
-                              w.status.includes('Baja') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                              (() => {
+                                const correctStatus = getCorrectWorkerStatus(w);
+                                return correctStatus === WorkerStatus.DISPONIBLE ? 'bg-green-100 text-green-700' : 
+                                       correctStatus.includes('Baja') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+                              })()
                            }`}>
-                              {w.status}
+                              {getCorrectWorkerStatus(w)}
                            </span>
                         </td>
-                        <td className="px-6 py-4 text-xs font-bold text-slate-600">
-                           {w.status !== WorkerStatus.DISPONIBLE && w.statusEndDate ? formatDateDMY(w.statusEndDate) : <span className="text-slate-300">-</span>}
+                        <td className="px-6 py-3 text-xs font-bold text-slate-600">
+                           {(() => {
+                             const nextChange = getNextStatusChange(w);
+                             if (!nextChange) {
+                               return <span className="text-slate-300">Sin cambios</span>;
+                             }
+                             
+                             const statusColor = nextChange.status === WorkerStatus.DISPONIBLE ? 'text-green-600' :
+                                              nextChange.status.includes('Baja') ? 'text-red-600' : 'text-amber-600';
+                             
+                             return (
+                               <div className="flex flex-col">
+                                 <span className="text-slate-700">{formatDateDMY(nextChange.date)}</span>
+                                 <span className={`text-[9px] uppercase ${statusColor}`}>{nextChange.status}</span>
+                               </div>
+                             );
+                           })()}
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-6 py-3 text-xs font-bold text-slate-600">
+                           {(() => {
+                             const currentStatus = getCurrentWorkerStatus(w);
+                             
+                             // Si está disponible, mostrar el próximo registro futuro
+                             if (currentStatus.status === WorkerStatus.DISPONIBLE) {
+                               const today = new Date().toISOString().split('T')[0];
+                               const futureRecords = w.statusRecords?.filter(record => 
+                                 new Date(record.startDate) > new Date(today)
+                               ).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+                               
+                               if (futureRecords && futureRecords.length > 0) {
+                                 const nextRecord = futureRecords[0];
+                                 return nextRecord.endDate ? formatDateDMY(nextRecord.endDate) : <span className="text-red-600 font-black">IND.</span>;
+                               }
+                               
+                               return <span className="text-slate-300">-</span>;
+                             }
+                             
+                             // Si está en estado no disponible, mostrar la fecha fin del registro actual
+                             if (currentStatus.endDate) {
+                               return formatDateDMY(currentStatus.endDate);
+                             }
+                             
+                             return <span className="text-red-600 font-black">IND.</span>;
+                           })()}
+                        </td>
+                        <td className="px-6 py-3 text-right">
                            <button onClick={() => setEditingWorker(w)} className="p-2 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded-xl transition-colors">
                               <Edit2 className="w-4 h-4" />
                            </button>
@@ -1939,13 +3052,34 @@ const App: React.FC = () => {
       {showBackupModal && (
          <div className="fixed inset-0 z-[300] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowBackupModal(false)}>
             <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-               <h3 className="text-lg font-black text-slate-900 italic uppercase mb-4">Base de Datos</h3>
+               <h3 className="text-lg font-black text-slate-900 italic uppercase mb-4">COPIAS DE SEGURIDAD</h3>
                <div className="space-y-3">
-                  <button onClick={exportBackup} className="w-full py-4 bg-blue-50 rounded-2xl font-black text-xs uppercase tracking-widest text-blue-600 hover:bg-blue-100 flex items-center justify-center gap-2 transition-colors"><DownloadCloud className="w-4 h-4" /> Exportar Backup JSON</button>
+                  <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200">
+                     <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-black text-amber-800 uppercase tracking-wider">Backup Automático</span>
+                        <button
+                           onClick={() => setAutoBackupEnabled(!autoBackupEnabled)}
+                           className={`w-12 h-6 rounded-full transition-colors ${
+                              autoBackupEnabled ? 'bg-amber-500' : 'bg-amber-200'
+                           }`}
+                        >
+                           <div className={`w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${
+                              autoBackupEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                           }`} />
+                        </button>
+                     </div>
+                     <p className="text-[10px] text-amber-700">
+                        {autoBackupEnabled 
+                           ? '✅ Activo: Cada hora + al cerrar página' 
+                           : '❌ Inactivo: Sin backups automáticos'
+                        }
+                     </p>
+                  </div>
+                  
+                  <button onClick={exportBackup} className="w-full py-4 bg-blue-50 rounded-2xl font-black text-xs uppercase tracking-widest text-blue-600 hover:bg-blue-100 flex items-center justify-center gap-2 transition-colors"><DownloadCloud className="w-4 h-4" /> Exportar Backup COMPLETO</button>
                   <button onClick={exportDatabaseToExcel} className="w-full py-4 bg-green-50 rounded-2xl font-black text-xs uppercase tracking-widest text-green-600 hover:bg-green-100 flex items-center justify-center gap-2 transition-colors"><FileSpreadsheet className="w-4 h-4" /> Exportar Todo a Excel</button>
                   
                   <button onClick={() => backupInputRef.current?.click()} className="w-full py-4 bg-slate-100 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-600 hover:bg-slate-200 flex items-center justify-center gap-2 transition-colors"><Upload className="w-4 h-4" /> Importar Excel / JSON</button>
-                  <button onClick={downloadExcelTemplate} className="w-full py-4 bg-purple-50 rounded-2xl font-black text-xs uppercase tracking-widest text-purple-600 hover:bg-purple-100 flex items-center justify-center gap-2 transition-colors"><Table className="w-4 h-4" /> Descargar Plantilla</button>
                </div>
             </div>
          </div>
@@ -1989,8 +3123,7 @@ const App: React.FC = () => {
                           ssReport.altas.map(w => (
                              <div key={w.id} className="bg-white p-3 rounded-xl border border-green-100 shadow-sm flex justify-between items-center">
                                 <div>
-                                   <p className="font-black text-slate-700 text-sm">{w.name}</p>
-                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{w.dni}</p>
+                                   <p className="font-black text-slate-700 text-sm">{getWorkerSSFormat(w)}</p>
                                 </div>
                                 <span className="text-[10px] font-black text-green-600 bg-green-50 px-2 py-1 rounded">{w.code}</span>
                              </div>
@@ -2022,8 +3155,7 @@ const App: React.FC = () => {
                           ssReport.bajas.map(w => (
                              <div key={w.id} className="bg-white p-3 rounded-xl border border-red-100 shadow-sm flex justify-between items-center">
                                 <div>
-                                   <p className="font-black text-slate-700 text-sm">{w.name}</p>
-                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{w.dni}</p>
+                                   <p className="font-black text-slate-700 text-sm">{getWorkerSSFormat(w)}</p>
                                 </div>
                                 <span className="text-[10px] font-black text-red-600 bg-red-50 px-2 py-1 rounded">{w.code}</span>
                              </div>
@@ -2353,31 +3485,76 @@ const App: React.FC = () => {
       
       {editingWorker && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setEditingWorker(null)}>
-          <div className="bg-white w-full max-w-2xl rounded-[32px] p-8 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
+          <div className="bg-white w-full max-w-4xl rounded-[32px] p-8 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
             
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-black text-slate-900 italic uppercase tracking-tight">Editar Operario</h2>
               <button onClick={() => setEditingWorker(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div className="space-y-1">
-                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre Completo</label>
-                 <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.name} onChange={e => setEditingWorker({...editingWorker, name: e.target.value})} />
+            {/* Primera fila: Nombre - Apellidos - Apodo */}
+            <div className="grid grid-cols-12 gap-4 mb-6">
+              <div className="col-span-5 space-y-1">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Nombre</label>
+                 <input 
+                   className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" 
+                   value={editingWorker.firstName || ''} 
+                   onChange={e => {
+                     const firstName = e.target.value;
+                     const lastName = editingWorker.lastName || '';
+                     setEditingWorker({
+                       ...editingWorker, 
+                       firstName,
+                       lastName,
+                       name: `${firstName} ${lastName}`.trim()
+                     });
+                   }} 
+                   placeholder="Juan"
+                 />
               </div>
-              <div className="space-y-1">
+              <div className="col-span-5 space-y-1">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Apellidos</label>
+                 <input 
+                   className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" 
+                   value={editingWorker.lastName || ''} 
+                   onChange={e => {
+                     const firstName = editingWorker.firstName || '';
+                     const lastName = e.target.value;
+                     setEditingWorker({
+                       ...editingWorker, 
+                       firstName,
+                       lastName,
+                       name: `${firstName} ${lastName}`.trim()
+                     });
+                   }} 
+                   placeholder="García López"
+                 />
+              </div>
+              <div className="col-span-2 space-y-1">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Apodo</label>
+                 <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.apodo || ''} onChange={e => setEditingWorker({...editingWorker, apodo: e.target.value || undefined})} placeholder="Apodo" />
+              </div>
+            </div>
+
+            {/* Segunda fila: Código - DNI - Teléfono */}
+            <div className="grid grid-cols-12 gap-4 mb-6">
+              <div className="col-span-3 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Código</label>
                  <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.code} onChange={e => setEditingWorker({...editingWorker, code: e.target.value})} />
               </div>
-              <div className="space-y-1">
+              <div className="col-span-4 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">DNI / NIE</label>
                  <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.dni} onChange={e => setEditingWorker({...editingWorker, dni: e.target.value})} />
               </div>
-              <div className="space-y-1">
+              <div className="col-span-5 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Teléfono</label>
                  <input className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" value={editingWorker.phone} onChange={e => setEditingWorker({...editingWorker, phone: e.target.value})} />
               </div>
-              <div className="space-y-1">
+            </div>
+
+            {/* Tercera fila: Cargo/Puesto - Tipo Contrato - Estado Actual */}
+            <div className="grid grid-cols-12 gap-4 mb-6">
+              <div className="col-span-4 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Cargo / Puesto</label>
                  <div className="relative">
                    <select className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none appearance-none" value={editingWorker.role} onChange={e => setEditingWorker({...editingWorker, role: e.target.value})}>
@@ -2386,7 +3563,7 @@ const App: React.FC = () => {
                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none"><ChevronDown className="w-4 h-4 text-slate-400" /></div>
                  </div>
               </div>
-              <div className="space-y-1">
+              <div className="col-span-4 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Tipo Contrato</label>
                  <div className="relative">
                    <select className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none appearance-none" value={editingWorker.contractType} onChange={e => setEditingWorker({...editingWorker, contractType: e.target.value as ContractType})}>
@@ -2395,56 +3572,21 @@ const App: React.FC = () => {
                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none"><ChevronDown className="w-4 h-4 text-slate-400" /></div>
                  </div>
               </div>
-              <div className="space-y-1">
+              <div className="col-span-4 space-y-1">
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Estado Actual</label>
-                 <div className="relative">
-                   <select 
-                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
-                      value={editingWorker.status}
-                      onChange={e => {
-                         const newStatus = e.target.value as WorkerStatus;
-                         setEditingWorker({
-                            ...editingWorker, 
-                            status: newStatus,
-                            statusStartDate: newStatus === WorkerStatus.DISPONIBLE ? undefined : editingWorker.statusStartDate,
-                            statusEndDate: newStatus === WorkerStatus.DISPONIBLE ? undefined : editingWorker.statusEndDate
-                         });
-                      }}
-                   >
-                     {Object.values(WorkerStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                   </select>
-                   <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none"><ChevronDown className="w-4 h-4 text-slate-400" /></div>
+                 <div className="flex items-center gap-2 h-full">
+                   <span className={`flex-1 px-3 py-3 rounded-xl text-xs font-black uppercase text-center ${
+                     getCurrentWorkerStatus(editingWorker).status === WorkerStatus.DISPONIBLE ? 'bg-green-100 text-green-700' :
+                     getCurrentWorkerStatus(editingWorker).status === WorkerStatus.VACACIONES ? 'bg-amber-100 text-amber-700' :
+                     getCurrentWorkerStatus(editingWorker).status.includes('Baja') ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'
+                   }`}>
+                     {getCurrentWorkerStatus(editingWorker).status}
+                   </span>
                  </div>
               </div>
             </div>
 
-            {editingWorker.status !== WorkerStatus.DISPONIBLE && (
-               <div className="bg-amber-50 rounded-2xl p-4 mb-6 border border-amber-100 flex items-center gap-4 animate-in fade-in slide-in-from-top-2">
-                  <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
-                     <CalendarDays className="w-5 h-5" />
-                  </div>
-                  <div className="flex-1 grid grid-cols-2 gap-4">
-                     <div className="space-y-1">
-                        <label className="text-[10px] font-black text-amber-700 uppercase tracking-widest ml-1">Fecha Inicio {editingWorker.status}</label>
-                        <input 
-                           type="date" 
-                           className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-amber-400 outline-none"
-                           value={editingWorker.statusStartDate || ''}
-                           onChange={e => setEditingWorker({...editingWorker, statusStartDate: e.target.value})}
-                        />
-                     </div>
-                     <div className="space-y-1">
-                        <label className="text-[10px] font-black text-amber-700 uppercase tracking-widest ml-1">Fecha Fin {editingWorker.status}</label>
-                        <input 
-                           type="date" 
-                           className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-amber-400 outline-none"
-                           value={editingWorker.statusEndDate || ''}
-                           onChange={e => setEditingWorker({...editingWorker, statusEndDate: e.target.value})}
-                        />
-                     </div>
-                  </div>
-               </div>
-            )}
+            {/* Resto del contenido del modal */}
 
             <div className="flex gap-4 mb-8">
               <label className="flex items-center gap-3 bg-slate-50 px-4 py-3 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors flex-1">
@@ -2517,6 +3659,154 @@ const App: React.FC = () => {
                      </div>
                    ))
                  )}
+              </div>
+            </div>
+
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-slate-400" />
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Registros de Estados</label>
+                </div>
+                <button
+                  onClick={() => {
+                    setEditingStatusRecord({
+                      status: WorkerStatus.VACACIONES,
+                      startDate: new Date().toISOString().split('T')[0],
+                      endDate: new Date().toISOString().split('T')[0]
+                    });
+                    setShowAddRecordForm(true);
+                  }}
+                  className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-black uppercase hover:bg-blue-600 transition-colors"
+                >
+                  + Añadir Registro
+                </button>
+              </div>
+
+              {showAddRecordForm && (
+                <div className="bg-slate-50 rounded-xl p-4 mb-4 border border-slate-200">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Estado</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={editingStatusRecord?.status || WorkerStatus.VACACIONES}
+                        onChange={e => setEditingStatusRecord(prev => prev ? {...prev, status: e.target.value as WorkerStatus} : null)}
+                      >
+                        <option value={WorkerStatus.VACACIONES}>Vacaciones</option>
+                        <option value={WorkerStatus.BAJA_MEDICA}>Baja Médica</option>
+                        <option value={WorkerStatus.BAJA_PATERNIDAD}>Baja Paternidad</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Fecha Inicio</label>
+                      <input
+                        type="date"
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={editingStatusRecord?.startDate || ''}
+                        onChange={e => setEditingStatusRecord(prev => prev ? {...prev, startDate: e.target.value} : null)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Fecha Fin</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="date"
+                          className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={editingStatusRecord?.endDate === 'IND.' ? '' : (editingStatusRecord?.endDate || '')}
+                          onChange={e => setEditingStatusRecord(prev => prev ? {...prev, endDate: e.target.value} : null)}
+                          placeholder="Seleccionar fecha"
+                          disabled={editingStatusRecord?.endDate === 'IND.'}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setEditingStatusRecord(prev => prev ? {...prev, endDate: prev?.endDate === 'IND.' ? '' : 'IND.'} : null)}
+                          className={`px-3 py-2 rounded-lg text-[10px] font-black uppercase transition-colors ${
+                            editingStatusRecord?.endDate === 'IND.' 
+                              ? 'bg-red-600 text-white' 
+                              : 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600'
+                          }`}
+                        >
+                          IND.
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleAddStatusRecord}
+                      className="px-3 py-1 bg-green-500 text-white rounded-lg text-[10px] font-black uppercase hover:bg-green-600 transition-colors"
+                    >
+                      Guardar
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAddRecordForm(false);
+                        setEditingStatusRecord(null);
+                      }}
+                      className="px-3 py-1 bg-slate-300 text-slate-700 rounded-lg text-[10px] font-black uppercase hover:bg-slate-400 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200">
+                      <th className="text-left py-2 px-2 font-black text-slate-400 uppercase tracking-wider text-[10px]">Estado</th>
+                      <th className="text-left py-2 px-2 font-black text-slate-400 uppercase tracking-wider text-[10px]">Fecha Inicio</th>
+                      <th className="text-left py-2 px-2 font-black text-slate-400 uppercase tracking-wider text-[10px]">Fecha Fin</th>
+                      <th className="text-left py-2 px-2 font-black text-slate-400 uppercase tracking-wider text-[10px]">Total Días</th>
+                      <th className="text-center py-2 px-2 font-black text-slate-400 uppercase tracking-wider text-[10px]">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(!editingWorker.statusRecords || editingWorker.statusRecords.length === 0) ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-4 text-slate-400 font-black text-[10px]">
+                          Sin registros
+                        </td>
+                      </tr>
+                    ) : (
+                      editingWorker.statusRecords.map(record => (
+                        <tr key={record.id} className="border-b border-slate-100 hover:bg-slate-50">
+                          <td className="py-2 px-2">
+                            <span className={`px-2 py-1 rounded text-[9px] font-black uppercase ${
+                              record.status === WorkerStatus.VACACIONES ? 'bg-amber-100 text-amber-700' :
+                              record.status.includes('Baja') ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {record.status}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2 font-medium text-slate-600">{formatDateDMY(record.startDate)}</td>
+                          <td className="py-2 px-2 font-medium text-slate-600">{formatDateDMY(record.endDate)}</td>
+                          <td className="py-2 px-2 font-black text-slate-700">{record.totalDays} días</td>
+                          <td className="py-2 px-2 text-center">
+                            <div className="flex gap-1 justify-center">
+                              <button
+                                onClick={() => handleEditStatusRecord(record.id)}
+                                className="p-1 hover:bg-blue-50 text-blue-400 hover:text-blue-600 rounded transition-colors"
+                                title="Editar"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteStatusRecord(record.id)}
+                                className="p-1 hover:bg-red-50 text-red-400 hover:text-red-600 rounded transition-colors"
+                                title="Eliminar"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -3373,6 +4663,7 @@ const App: React.FC = () => {
       </div>
     )}
 
+    
   </div>
 );
 };

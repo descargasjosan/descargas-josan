@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { CalendarDays, Search, Download, Table, ArrowRight, Clock, ChevronLeft, ChevronRight, X, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { PlanningState, Worker, ContractType, Job, Holiday } from '../lib/types';
-import { formatDateDMY, isHoliday } from '../lib/utils';
+import { formatDateDMY, isHoliday, getWorkerDisplayName } from '../lib/utils';
 
 interface CompactPlanningViewProps {
   planning: PlanningState;
@@ -145,7 +145,10 @@ const CompactPlanningView: React.FC<CompactPlanningViewProps> = ({ planning }) =
       const data = filteredJobs.map(job => {
           const client = planning.clients.find(c => c.id === job.clientId);
           const center = client?.centers.find(ct => ct.id === job.centerId);
-          const workers = job.assignedWorkerIds.map(id => planning.workers.find(w => w.id === id)?.name).join(', ');
+          const workers = job.assignedWorkerIds.map(id => {
+              const worker = planning.workers.find(w => w.id === id);
+              return worker ? getWorkerDisplayName(worker) : '';
+          }).filter(name => name).join(', ');
           
           return {
               Fecha: formatDateDMY(job.date),
