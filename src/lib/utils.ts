@@ -119,8 +119,21 @@ export const validateAssignment = (
   customHolidays: Holiday[] = [],
   clients: Client[] = [] 
 ): { error: string | null; warning: string | null } => {
+  // 🔍 DEBUG: Log de validación
+  console.log('🔍 DEBUG - Validando asignación:', {
+    workerName: worker.name,
+    workerId: worker.id,
+    workerStatus: worker.status,
+    jobId: job.id,
+    clientId: job.clientId,
+    assignedWorkerIds: job.assignedWorkerIds,
+    restrictedClientIds: worker.restrictedClientIds
+  });
+
   // Verificar si el operario está disponible o si su estado no disponible ha finalizado
-  if (worker.status !== WorkerStatus.DISPONIBLE) {
+  // 🔄 COMPATIBILIDAD: Aceptar "Activo" como equivalente a "Disponible"
+  if (worker.status !== WorkerStatus.DISPONIBLE && worker.status !== 'Activo') {
+    console.log('❌ DEBUG - Estado no disponible:', worker.status);
     // Si tiene fecha de fin de estado, verificar si la tarea es posterior
     if (worker.statusEndDate) {
       if (job.date <= worker.statusEndDate) {
@@ -133,8 +146,15 @@ export const validateAssignment = (
     }
   }
   
-  if (worker.restrictedClientIds?.includes(job.clientId)) return { error: `Restricción cliente`, warning: null };
-  if (job.assignedWorkerIds.includes(worker.id)) return { error: 'Ya asignado', warning: null };
+  if (worker.restrictedClientIds?.includes(job.clientId)) {
+    console.log('❌ DEBUG - Cliente restringido:', job.clientId);
+    return { error: `Restricción cliente`, warning: null };
+  }
+  
+  if (job.assignedWorkerIds.includes(worker.id)) {
+    console.log('❌ DEBUG - Ya asignado:', worker.id);
+    return { error: 'Ya asignado', warning: null };
+  }
   
   const client = clients.find(c => c.id === job.clientId);
   if (client && client.requiredCourses && client.requiredCourses.length > 0) {
@@ -142,6 +162,7 @@ export const validateAssignment = (
     const missingCourses = client.requiredCourses.filter(req => !workerCourses.includes(req));
     
     if (missingCourses.length > 0) {
+      console.log('❌ DEBUG - Faltan cursos:', missingCourses);
       return { 
         error: null, 
         warning: `⚠️ FALTA FORMACIÓN EXIGIDA: ${missingCourses.join(', ')}` 
@@ -150,8 +171,12 @@ export const validateAssignment = (
   }
 
   const continuityGaps = checkContinuityRisk(worker, job.date, allJobs, customHolidays);
-  if (continuityGaps) return { error: null, warning: `Aviso SS: trabajó el ${getPreviousWorkingDay(job.date, customHolidays)} y hay días no laborables de por medio.` };
+  if (continuityGaps) {
+    console.log('⚠️ DEBUG - Riesgo de continuidad:', continuityGaps);
+    return { error: null, warning: `Aviso SS: trabajó el ${getPreviousWorkingDay(job.date, customHolidays)} y hay días no laborables de por medio.` };
+  }
   
+  console.log('✅ DEBUG - Validación exitosa');
   return { error: null, warning: null };
 };
 

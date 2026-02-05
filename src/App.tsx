@@ -73,18 +73,19 @@ const detectStaleData = async () => {
         .eq('id', 1)
         .single();
 
-      if (serverData?.updated_at && serverData.updated_at > localTimestamp) {
-        console.warn('⚠️ DATOS LOCALES ANTIGUOS DETECTADOS');
-        edgeSpecificLog('STALE DATA DETECTED', {
-          localTimestamp,
-          serverTimestamp: serverData.updated_at
-        });
+      // 🚫 TEMPORALMENTE DESACTIVADO: Evitar bucle de sincronización
+      // if (serverData?.updated_at && serverData.updated_at > localTimestamp) {
+      //   console.warn('⚠️ DATOS LOCALES ANTIGUOS DETECTADOS');
+      //   edgeSpecificLog('STALE DATA DETECTED', {
+      //     localTimestamp,
+      //     serverTimestamp: serverData.updated_at
+      //   });
 
-        if (window.confirm('⚠️ Se han detectado datos más recientes en el servidor. ¿Deseas recargar para sincronizar?')) {
-          localStorage.setItem('forced_reload_reason', 'stale_data');
-          window.location.reload();
-        }
-      }
+      //   if (window.confirm('⚠️ Se han detectado datos más recientes en el servidor. ¿Deseas recargar para sincronizar?')) {
+      //     localStorage.setItem('forced_reload_reason', 'stale_data');
+      //     window.location.reload();
+      //   }
+      // }
     } catch (error) {
       edgeSpecificLog('STALE CHECK ERROR', { error: error.message });
     }
@@ -458,6 +459,8 @@ const CalendarSelector: React.FC<CalendarSelectorProps> = ({ currentDate, custom
 };
 
 const App: React.FC = () => {
+  console.log('🚀 APP v1.2.2 - Compatibilidad estado "Activo"');
+  
    const [session, setSession] = useState<any>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
@@ -682,22 +685,23 @@ const App: React.FC = () => {
           const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
           console.log('🔒 Diferencia de tiempo (ms):', timeDifference);
           
-          if (timeDifference > 5000) { // 5 segundos de tolerancia
-            console.warn('🚨 CONFLICTO DE SINCRONIZACIÓN DETECTADO');
-            edgeSpecificLog('SYNC CONFLICT DETECTED', {
-              localTimestamp,
-              serverTimestamp: currentServerData.updated_at,
-              timeDifference,
-              timestamp: new Date().toISOString()
-            });
+                    // 🚫 DESACTIVADO: Permitir que el nuevo sistema de sincronización simple maneje los cambios
+          // if (timeDifference > 5000) { // 5 segundos de tolerancia
+          //   console.warn('🚨 CONFLICTO DE SINCRONIZACIÓN DETECTADO');
+          //   edgeSpecificLog('SYNC CONFLICT DETECTED', {
+          //     localTimestamp,
+          //     serverTimestamp: currentServerData.updated_at,
+          //     timeDifference,
+          //     timestamp: new Date().toISOString()
+          //   });
             
-            showNotification(
-              '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página para obtener los cambios más recientes.', 
-              'error'
-            );
-            setDbStatus('error');
-            return;
-          }
+          //   showNotification(
+          //     '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página para obtener los cambios más recientes.', 
+          //     'error'
+          //   );
+          //   setDbStatus('error');
+          //   return;
+          // }
           
           console.log('✅ Timestamp verificado - Sin conflictos');
         } else {
@@ -922,6 +926,53 @@ const App: React.FC = () => {
     setTimeout(() => setNotification(null), 5000);
   }, []);
 
+  // 🔄 SINCRONIZACIÓN SIMPLE - ESCUCHAR CAMBIOS DE OTROS USUARIOS
+  useEffect(() => {
+    const channel = supabase
+      .channel('planning_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'planning_snapshots'
+        },
+        async (payload) => {
+          console.log('🔄 Cambio detectado de otro usuario:', payload);
+          
+          try {
+            // Cargar los datos más recientes
+            const { data: latestData } = await supabase
+              .from('planning_snapshots')
+              .select('data')
+              .eq('id', 1)
+              .single();
+            
+            if (latestData?.data) {
+              const parsedData = JSON.parse(latestData.data);
+              setPlanning(parsedData);
+              showNotification('Datos actualizados desde otro usuario', 'info');
+              console.log('✅ Datos sincronizados automáticamente');
+            }
+          } catch (error) {
+            console.error('❌ Error sincronizando datos:', error);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [setPlanning, showNotification]);
+
+  // 🚫 NUEVO SISTEMA DE CONCURRENCIA DESACTIVADO TEMPORALMENTE
+  // const { saveData, isSaving, triggerAutoSave } = useSimpleConcurrency({
+  //   planning,
+  //   setPlanning,
+  //   showNotification
+  // });
+
   // Función para guardar manualmente con notificación de éxito
   const saveToSupabase = useCallback(async (showSuccessNotification = false) => {
     try {
@@ -949,14 +1000,15 @@ const App: React.FC = () => {
           const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
           const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
           
-          if (timeDifference > 5000) { // 5 segundos de tolerancia
-            showNotification(
-              '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página primero.', 
-              'error'
-            );
-            setDbStatus('error');
-            return false;
-          }
+                    // 🚫 DESACTIVADO: Permitir sincronización simple
+          // if (timeDifference > 5000) { // 5 segundos de tolerancia
+          //   showNotification(
+          //     '❌ Error de sincronización: Otro usuario ha modificado los datos. Recarga la página primero.', 
+          //     'error'
+          //   );
+          //   setDbStatus('error');
+          //   return false;
+          // }
         }
       }
       
@@ -1911,13 +1963,14 @@ const App: React.FC = () => {
             const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
             const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
             
-            if (timeDifference > 5000) { // 5 segundos de tolerancia
-              showNotification(
-                '❌ Error de sincronización durante importación: Otro usuario ha modificado los datos. Recarga la página primero.', 
-                'error'
-              );
-              return;
-            }
+            // 🚫 TEMPORALMENTE DESACTIVADO: Permitir importación sin verificación de sincronización
+            // if (timeDifference > 5000) { // 5 segundos de tolerancia
+            //   showNotification(
+            //     '❌ Error de sincronización durante importación: Otro usuario ha modificado los datos. Recarga la página primero.', 
+            //     'error'
+            //   );
+            //   return;
+            // }
           }
         }
         
@@ -2280,13 +2333,14 @@ const App: React.FC = () => {
             const normalizedServerTimestamp = new Date(currentServerData.updated_at).getTime();
             const timeDifference = Math.abs(normalizedServerTimestamp - normalizedLocalTimestamp);
             
-            if (timeDifference > 5000) { // 5 segundos de tolerancia
-              showNotification(
-                '❌ Error de sincronización durante recuperación: Otro usuario ha modificado los datos. Recarga la página primero.', 
-                'error'
-              );
-              return;
-            }
+                        // 🚫 DESACTIVADO: Permitir sincronización simple durante recuperación
+            // if (timeDifference > 5000) { // 5 segundos de tolerancia
+            //   showNotification(
+            //     '❌ Error de sincronización durante recuperación: Otro usuario ha modificado los datos. Recarga la página primero.', 
+            //     'error'
+            //   );
+            //   return;
+            // }
           }
         }
         
@@ -2420,7 +2474,7 @@ const App: React.FC = () => {
         }`}
         onClick={() => {
           if (dbStatus === 'connected' || dbStatus === 'error') {
-            saveToSupabase(true); // Guardar manualmente con notificación de éxito
+            saveToSupabase(true); // Usar sistema original
           }
         }}
         title={dbStatus === 'connected' || dbStatus === 'error' ? 'Clic para guardar manualmente' : undefined}
@@ -4663,7 +4717,10 @@ const App: React.FC = () => {
       </div>
     )}
 
-    
+    {/* INDICADOR DE VERSIÓN */}
+    <div className="fixed bottom-2 right-2 text-[8px] text-slate-400 font-mono z-[999]">
+      v1.2.2
+    </div>
   </div>
 );
 };
