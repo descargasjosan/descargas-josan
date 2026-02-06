@@ -499,9 +499,16 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
 
                                 {/* Columna DOTACIÓN */}
                                 <div className="lg:w-24 px-4 py-2 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0">
-                                  <div className="flex items-center justify-between mb-1.5">
+                                  <div className="flex items-center justify-between mb-1">
                                     <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Operarios</span>
-                                    <span className="text-[9px] font-black text-slate-900">{job.assignedWorkerIds.length}/{job.requiredWorkers}</span>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[9px] font-black text-slate-900">{job.assignedWorkerIds.length}/{job.requiredWorkers}</span>
+                                      {job.isImposed && (
+                                        <span className="text-[6px] font-black text-orange-600 uppercase tracking-wider bg-orange-50 px-1 rounded leading-none">
+                                          SOLIC
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                                     <div className={`h-full transition-all duration-700 ${progress >= 100 ? 'bg-green-500' : 'bg-blue-600'}`} style={{ width: `${Math.min(progress, 100)}%` }} />

@@ -58,6 +58,33 @@ export interface Course {
   updatedAt: string;
 }
 
+// 🏥 TIPOS MÉDICOS PARA SALUD LABAL
+export interface MedicalCourse {
+  id: string;
+  name?: string; // Solo para cursos laborales, opcional para reconocimientos
+  type: 'recognition' | 'course'; // 🏥 Reconocimiento Médico o 📚 Curso Formación Laboral
+  provider: string; // Mutua, Servicio Médico, Recursos Laborales, etc.
+  issueDate?: string; // Fecha de realización YYYY-MM-DD
+  expiryDate?: string; // Fecha de caducidad YYYY-MM-DD
+  status: 'active' | 'expired' | 'pending'; // Estado calculado automáticamente
+  assignedWorkerIds: string[]; // Operarios asignados
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MedicalAlert {
+  id: string;
+  workerId: string;
+  courseId: string;
+  courseName: string;
+  workerName: string;
+  type: 'recognition' | 'course';
+  provider: string;
+  expiryDate: string;
+  daysUntilExpiry: number;
+  alertLevel: 'critical' | 'warning' | 'info'; // 🔴 Crítico (caducado), 🟡 Advertencia (7 días), 🔵 Info (30 días)
+}
+
 export interface RegularTask {
   id: string;
   name: string;
@@ -159,8 +186,8 @@ export interface Job {
   locationDetails?: string;
   isCancelled?: boolean; 
   cancellationReason?: string; 
-  isFinished?: boolean; 
-  actualEndTime?: string; 
+  isFinished?: boolean;
+  isImposed?: boolean; // 🆕 Si es una imposición del cliente
 }
 
 // --- NUEVOS TIPOS PARA GESTIÓN DE FLOTA ---
@@ -195,7 +222,11 @@ export interface PlanningState {
   jobs: Job[];
   customHolidays: Holiday[];
   notifications: Record<string, string[]>; 
-  courses: Course[]; // Nuevo sistema de cursos
+  courses: Course[]; // Sistema de cursos general (se mantendrá para compatibilidad)
+  medicalCourses: MedicalCourse[]; // 🏥 Cursos y reconocimientos médicos
+  medicalAlerts: MedicalAlert[]; // ⚠️ Alertas médicas calculadas
+  selectedMedicalTab: 'dashboard' | 'courses' | 'alerts' | 'workers'; // 📋 Pestaña activa en Salud Laboral
+  editingMedicalCourse: MedicalCourse | null; // 📝 Curso médico en edición
   standardTasks: StandardTask[]; 
   dailyNotes: DailyNote[]; 
   fuelRecords: FuelRecord[];
@@ -203,7 +234,7 @@ export interface PlanningState {
   vehicleAssignments: VehicleAssignment[]; // Nuevo campo
 }
 
-export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact' | 'fleet';
+export type ViewType = 'planning' | 'clients' | 'workers' | 'stats' | 'databases' | 'compact' | 'fleet' | 'medical';
 
 // --- TIPOS PARA IMPORTACIÓN DE OPERARIOS ---
 

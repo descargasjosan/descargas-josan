@@ -5,7 +5,8 @@ import {
   ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
   Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles, ChevronLeft, ChevronRight, LayoutGrid,
   Calendar as CalendarIcon, Table, DownloadCloud, CalendarDays, MessageCircle, Copy, TrendingUp,
-  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight, StickyNote
+  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight, StickyNote,
+  HeartPulse
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -16,7 +17,7 @@ import FleetManager from './components/FleetManager';
 import LoginScreen from './components/LoginScreen';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS, WORKER_ROLES, MOCK_VEHICLES } from './lib/constants'; 
 import { getWorkerDisplayName, getWorkerSSFormat, addOrUpdateStatusRecord, removeStatusRecord, calculateDaysBetween, getCurrentWorkerStatus, getNextStatusChange, validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
-import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course } from './lib/types';
+import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course, MedicalCourse, MedicalAlert } from './lib/types';
 import { supabase } from '../supabaseClient';
 
 // 🔍 SISTEMA DE DETECCIÓN Y LOGGING PARA EDGE
@@ -492,7 +493,11 @@ const App: React.FC = () => {
     jobs: [], // Array vacío - se cargará desde Supabase
     customHolidays: [], 
     notifications: {},
-    courses: [], // Nuevo sistema de cursos
+    courses: [], // Sistema de cursos general (se mantendrá para compatibilidad)
+    medicalCourses: [], // 🏥 Cursos y reconocimientos médicos
+    medicalAlerts: [], // ⚠️ Alertas médicas calculadas
+    selectedMedicalTab: 'dashboard', // 📋 Pestaña activa en Salud Laboral
+    editingMedicalCourse: null, // 📝 Curso médico en edición
     standardTasks: [], // Array vacío - se cargará desde Supabase
     dailyNotes: [],
     fuelRecords: [],
@@ -921,10 +926,194 @@ const App: React.FC = () => {
     liters: '', cost: '', odometer: '', date: new Date().toISOString().split('T')[0]
   });
 
+  // 🏥 Estado para gestión médica dinámica
+  const [availableCourses, setAvailableCourses] = useState<string[]>([
+    'Curso de Manipulador de Alimentos',
+    'Curso de Carretillero',
+    'Curso de Prevención de Riesgos Laborales',
+    'Curso de Primeros Auxilios',
+    'Curso de Altura',
+    'Curso de Electricidad Básica',
+    'Curso de Soldadura',
+    'Curso de Montaje de Andamios'
+  ]);
+  const [availableProviders, setAvailableProviders] = useState<string[]>([
+    'Mutua',
+    'Servicio Médico', 
+    'Recursos Laborales',
+    'Otro'
+  ]);
+  const [medicalCourseName, setMedicalCourseName] = useState('');
+  const [medicalProviderName, setMedicalProviderName] = useState('');
+  const [showAddMedicalCourse, setShowAddMedicalCourse] = useState(false);
+  const [showAddMedicalProvider, setShowAddMedicalProvider] = useState(false);
+  const [workerSearchFilter, setWorkerSearchFilter] = useState('');
+  const [medicalWorkerFilter, setMedicalWorkerFilter] = useState(''); // Filtro general de operarios en Salud Laboral
+
   const showNotification = useCallback((message: string, type: 'error' | 'success' | 'warning' | 'info' = 'error') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
+
+  // 🏥 FUNCIONES MÉDICAS PARA SALUD LABAL
+  const calculateMedicalAlerts = useCallback((courses: MedicalCourse[], workers: Worker[]): MedicalAlert[] => {
+    const today = new Date();
+    const alerts: MedicalAlert[] = [];
+    
+    courses.forEach(course => {
+      if (!course.expiryDate) return; // Solo cursos con fecha de caducidad
+      
+      const expiryDate = new Date(course.expiryDate);
+      const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      
+      let alertLevel: 'critical' | 'warning';
+      let status: 'active' | 'expired' | 'pending';
+      
+      if (daysUntilExpiry < 0) {
+        alertLevel = 'critical'; // 🔴 Caducado
+        status = 'expired';
+      } else if (daysUntilExpiry <= 30) {
+        alertLevel = 'warning'; // 🟡 Próximo (0-30 días)
+        status = 'active';
+      } else {
+        // No crear alerta para más de 30 días
+        return;
+      }
+      
+      // Crear alerta para cada operario asignado
+      course.assignedWorkerIds.forEach(workerId => {
+        const worker = workers.find(w => w.id === workerId);
+        if (worker) {
+          const courseName = course.type === 'recognition' 
+            ? '🏥 Reconocimiento Médico' 
+            : course.name || '📚 Curso Formación Laboral';
+            
+          alerts.push({
+            id: `${course.id}-${workerId}`,
+            workerId: worker.id,
+            courseId: course.id,
+            courseName,
+            workerName: worker.name,
+            type: course.type,
+            provider: course.provider,
+            expiryDate: course.expiryDate,
+            daysUntilExpiry,
+            alertLevel
+          });
+        }
+      });
+    });
+    
+    return alerts.sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
+  }, []);
+
+  const addMedicalCourse = useCallback(async (course: Omit<MedicalCourse, 'id' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      const newCourse: MedicalCourse = {
+        ...course,
+        id: Date.now().toString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      
+      setPlanning(prev => {
+        const updatedCourses = [...prev.medicalCourses, newCourse];
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico añadido correctamente', 'success');
+    } catch (error) {
+      console.error('Error añadiendo registro médico:', error);
+      showNotification('Error al añadir el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  const updateMedicalCourse = useCallback(async (id: string, course: Partial<MedicalCourse>) => {
+    try {
+      setPlanning(prev => {
+        const updatedCourses = prev.medicalCourses.map(c => 
+          c.id === id 
+            ? { ...c, ...course, updatedAt: new Date().toISOString() }
+            : c
+        );
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico actualizado correctamente', 'success');
+    } catch (error) {
+      console.error('Error actualizando registro médico:', error);
+      showNotification('Error al actualizar el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  const deleteMedicalCourse = useCallback(async (id: string) => {
+    try {
+      setPlanning(prev => {
+        const updatedCourses = prev.medicalCourses.filter(c => c.id !== id);
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico eliminado correctamente', 'success');
+    } catch (error) {
+      console.error('Error eliminando registro médico:', error);
+      showNotification('Error al eliminar el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  // 🏥 FUNCIONES PARA GESTIÓN DINÁMICA
+  const addNewMedicalCourse = useCallback(() => {
+    if (medicalCourseName.trim() && !availableCourses.includes(medicalCourseName.trim())) {
+      setAvailableCourses(prev => [...prev, medicalCourseName.trim()]);
+      setMedicalCourseName('');
+      setShowAddMedicalCourse(false);
+      showNotification('Curso añadido correctamente', 'success');
+    }
+  }, [medicalCourseName, availableCourses, showNotification]);
+
+  const removeMedicalCourse = useCallback((courseToRemove: string) => {
+    setAvailableCourses(prev => prev.filter(course => course !== courseToRemove));
+    showNotification('Curso eliminado correctamente', 'success');
+  }, [showNotification]);
+
+  const addNewMedicalProvider = useCallback(() => {
+    if (medicalProviderName.trim() && !availableProviders.includes(medicalProviderName.trim())) {
+      setAvailableProviders(prev => [...prev, medicalProviderName.trim()]);
+      setMedicalProviderName('');
+      setShowAddMedicalProvider(false);
+      showNotification('Proveedor añadido correctamente', 'success');
+    }
+  }, [medicalProviderName, availableProviders, showNotification]);
+
+  const removeMedicalProvider = useCallback((providerToRemove: string) => {
+    setAvailableProviders(prev => prev.filter(provider => provider !== providerToRemove));
+    showNotification('Proveedor eliminado correctamente', 'success');
+  }, [showNotification]);
+
+  // 🏥 EFECTO PARA CALCULAR ALERTAS MÉDICAS AUTOMÁTICAMENTE
+  useEffect(() => {
+    const updatedAlerts = calculateMedicalAlerts(planning.medicalCourses, planning.workers);
+    if (JSON.stringify(updatedAlerts) !== JSON.stringify(planning.medicalAlerts)) {
+      setPlanning(prev => ({ ...prev, medicalAlerts: updatedAlerts }));
+    }
+  }, [planning.medicalCourses, planning.workers, calculateMedicalAlerts]);
 
   // 🔄 SINCRONIZACIÓN SIMPLE - ESCUCHAR CAMBIOS DE OTROS USUARIOS
   useEffect(() => {
@@ -2502,6 +2691,7 @@ const App: React.FC = () => {
             <button onClick={() => setView('compact')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'compact' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Vista Compacta"><Table className="w-6 h-6" /></button>
             <button onClick={() => setShowSSReport(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Reporte SS"><ListTodo className="w-6 h-6" /></button>
             <button onClick={() => setView('workers')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'workers' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión Operarios"><Users className="w-6 h-6" /></button>
+            <button onClick={() => setView('medical')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'medical' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Salud Laboral"><HeartPulse className="w-6 h-6" /></button>
             <button onClick={() => setView('clients')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'clients' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión Clientes"><Building2 className="w-6 h-6" /></button>
             <button onClick={() => setView('databases')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'databases' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Bases de Datos"><Database className="w-6 h-6" /></button>
             <button onClick={() => setView('fleet')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'fleet' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión de Flota"><Car className="w-6 h-6" /></button>
@@ -2939,6 +3129,320 @@ const App: React.FC = () => {
              </div>
            </div>
          )}
+         {view === 'medical' && (
+           <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
+             <div className="flex items-center justify-between mb-8">
+               <div>
+                 <h2 className="text-2xl font-black text-slate-900 italic uppercase">🏥 Salud Laboral</h2>
+                 <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestión Médica y Formación</p>
+               </div>
+               <div className="flex items-center gap-2">
+                 {planning.medicalAlerts.length > 0 && (
+                   <div className="bg-red-100 text-red-700 px-3 py-1 rounded-lg text-xs font-bold">
+                     🔴 {planning.medicalAlerts.length} alertas
+                   </div>
+                 )}
+                 <button 
+                   onClick={() => {
+                     const newCourse: MedicalCourse = {
+                       id: Date.now().toString(),
+                       name: '', // Vacío para reconocimientos, se llenará para cursos
+                       type: 'recognition',
+                       provider: 'Mutua',
+                       issueDate: new Date().toISOString().split('T')[0],
+                       expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                       status: 'active',
+                       assignedWorkerIds: [],
+                       createdAt: new Date().toISOString(),
+                       updatedAt: new Date().toISOString()
+                     };
+                     setPlanning(prev => ({ ...prev, editingMedicalCourse: newCourse }));
+                   }}
+                   className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-blue-700"
+                 >
+                   + Nuevo Registro Médico
+                 </button>
+               </div>
+             </div>
+
+             {/* Tabs de navegación */}
+             <div className="flex gap-4 mb-6 border-b border-slate-200">
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'courses' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'courses' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 📚 Registros Médicos
+               </button>
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'alerts' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'alerts' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 ⚠️ Alertas ({planning.medicalAlerts.length})
+               </button>
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'workers' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'workers' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 👥 Operarios
+               </button>
+             </div>
+
+             {/* Registros Médicos */}
+            {planning.selectedMedicalTab === 'courses' && (
+              <div>
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    value={medicalWorkerFilter}
+                    onChange={(e) => setMedicalWorkerFilter(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="🔍 Filtrar registros por operario..."
+                  />
+                </div>
+                
+                {/* Vista compacta de registros */}
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  {/* Header */}
+                  <div className="grid grid-cols-6 gap-2 p-3 bg-slate-50 border-b border-slate-200">
+                    <div className="text-xs font-bold text-slate-700 uppercase">Tipo</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Proveedor</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Operarios</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Realización</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Caducidad</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Acciones</div>
+                  </div>
+                  
+                  {/* Filtrar y mostrar registros */}
+                  {(() => {
+                    const filteredCourses = planning.medicalCourses.filter(course => 
+                      medicalWorkerFilter === '' || 
+                      course.assignedWorkerIds.some(workerId => {
+                        const worker = planning.workers.find(w => w.id === workerId);
+                        return worker && (
+                          worker.name.toLowerCase().includes(medicalWorkerFilter.toLowerCase()) ||
+                          worker.code.toLowerCase().includes(medicalWorkerFilter.toLowerCase())
+                        );
+                      })
+                    );
+                    
+                    return filteredCourses.map(course => {
+                      const assignedWorkers = course.assignedWorkerIds.slice(0, 2).map(workerId => {
+                        const worker = planning.workers.find(w => w.id === workerId);
+                        return worker ? worker.code : '';
+                      }).filter(code => code);
+                      
+                      return (
+                        <div key={course.id} className="grid grid-cols-6 gap-2 p-3 border-b border-slate-100 hover:bg-slate-50 items-center">
+                          <div className="text-sm font-medium text-slate-900 truncate">
+                            {course.type === 'recognition' ? '🏥 Reconocimiento' : (course.name || '📚 Curso')}
+                          </div>
+                          <div className="text-sm text-slate-600 truncate">
+                            {course.provider}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {assignedWorkers.length > 0 ? (
+                              <div className="flex gap-1 flex-wrap">
+                                {assignedWorkers.map((code, index) => (
+                                  <span key={index} className="bg-blue-100 text-blue-700 px-1 py-0.5 rounded text-xs">
+                                    {code}
+                                  </span>
+                                ))}
+                                {course.assignedWorkerIds.length > 2 && (
+                                  <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded text-xs">
+                                    +{course.assignedWorkerIds.length - 2}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">Sin asignar</span>
+                            )}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {course.issueDate || '-'}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {course.expiryDate || '-'}
+                          </div>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: course }))}
+                              className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                              title="Editar"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (confirm('¿Eliminar este registro médico?')) {
+                                  deleteMedicalCourse(course.id);
+                                }
+                              }}
+                              className="p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                              title="Eliminar"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+                
+                {/* Mensaje cuando no hay registros */}
+                {planning.medicalCourses.length === 0 && (
+                  <div className="text-center py-8 text-slate-400">
+                    <HeartPulse className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p className="font-bold uppercase text-xs tracking-widest">No hay registros médicos</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+             {/* Alertas */}
+             {planning.selectedMedicalTab === 'alerts' && (
+               <div>
+                 {/* Vista compacta de alertas */}
+                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                   {/* Header */}
+                   <div className="grid grid-cols-5 gap-2 p-3 bg-slate-50 border-b border-slate-200">
+                     <div className="text-xs font-bold text-slate-700 uppercase">Operario</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Tipo</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Proveedor</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Realización</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Caducidad</div>
+                   </div>
+                   
+                   {/* Mostrar alertas */}
+                   {(() => {
+                     if (planning.medicalAlerts.length === 0) {
+                       return (
+                         <div className="text-center py-8 text-slate-400">
+                           <CheckCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                           <p className="font-bold uppercase text-xs tracking-widest">No hay alertas activas</p>
+                           <p className="text-xs text-slate-400 mt-2">Solo se muestran registros que caducan en 30 días o menos</p>
+                         </div>
+                       );
+                     }
+                     
+                     return planning.medicalAlerts.map(alert => {
+                       const alertColor = alert.alertLevel === 'critical' ? 'border-red-500 bg-red-50' : 'border-yellow-500 bg-yellow-50';
+                       const alertIcon = alert.alertLevel === 'critical' ? '🔴' : '🟡';
+                       
+                       return (
+                         <div key={alert.id} className={`grid grid-cols-5 gap-2 p-3 border-l-4 ${alertColor} hover:opacity-80 transition-opacity items-center`}>
+                           <div className="text-sm font-medium text-slate-900">
+                             <div className="flex items-center gap-2">
+                               <span className="text-lg">{alertIcon}</span>
+                               <div>
+                                 <div className="font-medium">{alert.workerName}</div>
+                                 <div className="text-xs text-slate-500">
+                                   {alert.daysUntilExpiry < 0 ? `${Math.abs(alert.daysUntilExpiry)} días caducado` : `${alert.daysUntilExpiry} días`}
+                                 </div>
+                               </div>
+                             </div>
+                           </div>
+                           <div className="text-sm text-slate-600">
+                             {alert.type === 'recognition' ? '🏥 Reconocimiento' : alert.courseName}
+                           </div>
+                           <div className="text-sm text-slate-600 truncate">
+                             {alert.provider}
+                           </div>
+                           <div className="text-sm text-slate-600">
+                             {new Date(alert.expiryDate).toLocaleDateString('es-ES', { 
+                               day: '2-digit', 
+                               month: '2-digit', 
+                               year: 'numeric' 
+                             })}
+                           </div>
+                           <div className="text-sm font-medium">
+                             <span className={`px-2 py-1 rounded text-xs ${
+                               alert.alertLevel === 'critical' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                             }`}>
+                               {alert.alertLevel === 'critical' ? 'CADUCADO' : 'PRÓXIMO'}
+                             </span>
+                           </div>
+                         </div>
+                       );
+                     });
+                   })()}
+                 </div>
+               </div>
+             )}
+
+             {/* Operarios */}
+             {planning.selectedMedicalTab === 'workers' && (
+               <div className="space-y-4">
+                 {planning.workers.filter(worker => !worker.isArchived).map(worker => {
+                   const workerMedicalCourses = planning.medicalCourses.filter(course => 
+                     course.assignedWorkerIds.includes(worker.id)
+                   );
+                   const workerAlerts = planning.medicalAlerts.filter(alert => alert.workerId === worker.id);
+                   const hasAlerts = workerAlerts.length > 0;
+                   
+                   return (
+                     <div key={worker.id} className={`bg-white rounded-xl p-6 border ${
+                       hasAlerts ? 'border-red-200 bg-red-50' : 'border-slate-200'
+                     }`}>
+                       <div className="flex items-center justify-between mb-4">
+                         <div className="flex items-center gap-3">
+                           <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
+                             <Users className="w-6 h-6 text-slate-600" />
+                           </div>
+                           <div>
+                             <h4 className="font-bold text-slate-900">{worker.name}</h4>
+                             <p className="text-xs text-slate-500">{worker.code} • {worker.role}</p>
+                           </div>
+                         </div>
+                         {hasAlerts && (
+                           <div className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">
+                             {workerAlerts.length} alertas
+                           </div>
+                         )}
+                       </div>
+                       {workerMedicalCourses.length > 0 && (
+                         <div className="mt-4 pt-4 border-t border-slate-200">
+                           <h5 className="text-sm font-bold text-slate-900 mb-2">Registros asignados:</h5>
+                           <div className="space-y-2">
+                             {workerMedicalCourses.map(course => (
+                               <div key={course.id} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded">
+                                 <div>
+                                   <span className="font-medium">
+                                     {course.type === 'recognition' 
+                                       ? '🏥 Reconocimiento Médico' 
+                                       : course.name || '📚 Curso Formación Laboral'}
+                                   </span>
+                                   <span className="text-xs text-slate-500 ml-2">
+                                     {course.type === 'recognition' ? '🏥' : '📚'} • {course.provider}
+                                   </span>
+                                 </div>
+                                 <div className="text-xs text-slate-500">
+                                   {course.expiryDate && `Caduca: ${new Date(course.expiryDate).toLocaleDateString('es-ES')}`}
+                                 </div>
+                               </div>
+                             ))}
+                           </div>
+                         </div>
+                       )}
+                     </div>
+                   );
+                 })}
+               </div>
+             )}
+           </div>
+         )}
          {view === 'clients' && (
            <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
              <div className="flex items-center justify-between mb-8">
@@ -3371,6 +3875,20 @@ const App: React.FC = () => {
                              <ChevronRight className="w-5 h-5" />
                           </button>
                        </div>
+                    </div>
+
+                    {/* 🆕 Checkbox de imposición */}
+                    <div className="flex items-center gap-2 mt-3">
+                       <input
+                          type="checkbox"
+                          id="isImposed"
+                          checked={editingJob.isImposed || false}
+                          onChange={(e) => setEditingJob({...editingJob, isImposed: e.target.checked})}
+                          className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                       />
+                       <label htmlFor="isImposed" className="text-xs text-slate-600 cursor-pointer">
+                         Imposición del cliente
+                       </label>
                     </div>
                  </div>
 
@@ -4679,6 +5197,324 @@ const App: React.FC = () => {
               className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Guardar Curso
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* 🏥 MODAL DE EDICIÓN DE REGISTROS MÉDICOS */}
+    {planning.editingMedicalCourse && (
+      <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-2xl rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <h2 className="text-2xl font-black text-slate-900 italic uppercase mb-2">
+                {planning.editingMedicalCourse.id.startsWith(Date.now().toString().substring(0, 4)) ? 'Nuevo Registro Médico' : 'Editar Registro Médico'}
+              </h2>
+              <p className="text-sm text-slate-600">
+                {planning.editingMedicalCourse.type === 'recognition' ? '🏥 Reconocimiento Médico' : '📚 Curso Médico'}
+              </p>
+            </div>
+            <button 
+              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: null }))}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+            >
+              <X className="w-6 h-6 text-slate-400" />
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {/* Información básica */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Tipo</label>
+                <select
+                  value={planning.editingMedicalCourse.type}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, type: e.target.value as 'recognition' | 'course' } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="recognition">🏥 Reconocimiento Médico</option>
+                  <option value="course">📚 Curso Formación Laboral</option>
+                </select>
+              </div>
+              {planning.editingMedicalCourse.type === 'course' && (
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Nombre del Curso</label>
+                  <div className="flex gap-2 flex-wrap">
+                    <select
+                      value={planning.editingMedicalCourse.name || ''}
+                      onChange={(e) => setPlanning(prev => ({ 
+                        ...prev, 
+                        editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, name: e.target.value } : null 
+                      }))}
+                      className="flex-1 min-w-0 p-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    >
+                      <option value="">Seleccionar curso...</option>
+                      {availableCourses.map(course => (
+                        <option key={course} value={course}>{course}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setShowAddMedicalCourse(true)}
+                      className="px-3 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors flex-shrink-0"
+                      title="Añadir nuevo curso"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    {planning.editingMedicalCourse.name && availableCourses.includes(planning.editingMedicalCourse.name) && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`¿Eliminar el curso "${planning.editingMedicalCourse.name}"?`)) {
+                            removeMedicalCourse(planning.editingMedicalCourse.name!);
+                            setPlanning(prev => ({ 
+                              ...prev, 
+                              editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, name: '' } : null 
+                            }));
+                          }
+                        }}
+                        className="px-3 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex-shrink-0"
+                        title="Eliminar curso"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal para añadir nuevo curso */}
+            {showAddMedicalCourse && (
+              <div className="fixed inset-0 z-[400] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+                  <h3 className="text-lg font-black text-slate-900 mb-4">Añadir Nuevo Curso</h3>
+                  <input
+                    type="text"
+                    value={medicalCourseName}
+                    onChange={(e) => setMedicalCourseName(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                    placeholder="Nombre del nuevo curso..."
+                    autoFocus
+                  />
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowAddMedicalCourse(false);
+                        setMedicalCourseName('');
+                      }}
+                      className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={addNewMedicalCourse}
+                      disabled={!medicalCourseName.trim()}
+                      className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      Añadir Curso
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Proveedor</label>
+                <div className="flex gap-2 flex-wrap">
+                  <select
+                    value={planning.editingMedicalCourse.provider}
+                    onChange={(e) => setPlanning(prev => ({ 
+                      ...prev, 
+                      editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, provider: e.target.value } : null 
+                    }))}
+                    className="flex-1 min-w-0 p-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  >
+                    <option value="">Seleccionar proveedor...</option>
+                    {availableProviders.map(provider => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setShowAddMedicalProvider(true)}
+                    className="px-3 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors flex-shrink-0"
+                    title="Añadir nuevo proveedor"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                  {planning.editingMedicalCourse.provider && availableProviders.includes(planning.editingMedicalCourse.provider) && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`¿Eliminar el proveedor "${planning.editingMedicalCourse.provider}"?`)) {
+                          removeMedicalProvider(planning.editingMedicalCourse.provider!);
+                          setPlanning(prev => ({ 
+                            ...prev, 
+                            editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, provider: '' } : null 
+                          }));
+                        }
+                      }}
+                      className="px-3 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex-shrink-0"
+                      title="Eliminar proveedor"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Estado (calculado)</label>
+                <input
+                  type="text"
+                  value={planning.editingMedicalCourse.status}
+                  disabled
+                  className="w-full p-3 border border-slate-200 rounded-xl bg-slate-100 text-slate-600"
+                  readOnly
+                />
+              </div>
+            </div>
+
+            {/* Modal para añadir nuevo proveedor */}
+            {showAddMedicalProvider && (
+              <div className="fixed inset-0 z-[400] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+                  <h3 className="text-lg font-black text-slate-900 mb-4">Añadir Nuevo Proveedor</h3>
+                  <input
+                    type="text"
+                    value={medicalProviderName}
+                    onChange={(e) => setMedicalProviderName(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                    placeholder="Nombre del nuevo proveedor..."
+                    autoFocus
+                  />
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowAddMedicalProvider(false);
+                        setMedicalProviderName('');
+                      }}
+                      className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={addNewMedicalProvider}
+                      disabled={!medicalProviderName.trim()}
+                      className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      Añadir Proveedor
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Fecha de Realización</label>
+                <input
+                  type="date"
+                  value={planning.editingMedicalCourse.issueDate || ''}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, issueDate: e.target.value } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Fecha de Caducidad</label>
+                <input
+                  type="date"
+                  value={planning.editingMedicalCourse.expiryDate || ''}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, expiryDate: e.target.value } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Operarios asignados */}
+            <div>
+              <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Operarios Asignados</label>
+              <div className="mb-3">
+                <input
+                  type="text"
+                  value={workerSearchFilter}
+                  onChange={(e) => setWorkerSearchFilter(e.target.value)}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="🔍 Buscar operarios..."
+                />
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto border border-slate-200 rounded-xl p-3">
+                {planning.workers
+                  .filter(w => !w.isArchived)
+                  .filter(w => 
+                    workerSearchFilter === '' || 
+                    w.name.toLowerCase().includes(workerSearchFilter.toLowerCase()) ||
+                    w.code.toLowerCase().includes(workerSearchFilter.toLowerCase())
+                  )
+                  .map(worker => (
+                  <label key={worker.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={planning.editingMedicalCourse?.assignedWorkerIds.includes(worker.id) || false}
+                      onChange={(e) => {
+                        if (!planning.editingMedicalCourse) return;
+                        
+                        const updatedIds = e.target.checked
+                          ? [...planning.editingMedicalCourse.assignedWorkerIds, worker.id]
+                          : planning.editingMedicalCourse.assignedWorkerIds.filter(id => id !== worker.id);
+                        
+                        setPlanning(prev => ({ 
+                          ...prev, 
+                          editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, assignedWorkerIds: updatedIds } : null 
+                        }));
+                      }}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <div>
+                      <span className="font-medium text-slate-900">{worker.name}</span>
+                      <span className="text-xs text-slate-500 ml-2">{worker.code}</span>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-8 pt-6 border-t border-slate-100">
+            <button
+              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: null }))}
+              className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => {
+                if (!planning.editingMedicalCourse) return;
+                
+                // Verificar si es un registro nuevo (no existe en la lista)
+                const isNewRecord = !planning.medicalCourses.some(c => c.id === planning.editingMedicalCourse!.id);
+                
+                if (isNewRecord) {
+                  // Es un nuevo registro
+                  addMedicalCourse(planning.editingMedicalCourse);
+                } else {
+                  // Es un registro existente
+                  updateMedicalCourse(planning.editingMedicalCourse.id, planning.editingMedicalCourse);
+                }
+                setPlanning(prev => ({ ...prev, editingMedicalCourse: null }));
+              }}
+              disabled={!planning.editingMedicalCourse.name.trim() && planning.editingMedicalCourse.type === 'course'}
+              className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {planning.medicalCourses.some(c => c.id === planning.editingMedicalCourse?.id) ? 'Guardar Cambios' : 'Crear Registro'}
             </button>
           </div>
         </div>
