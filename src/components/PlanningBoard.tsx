@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText, List } from 'lucide-react';
+import { Clock, MapPin, Users, Plus, Edit2, X, AlertCircle, Search, Move, AlertTriangle, Euro, ArrowRightLeft, CheckCircle2, MoreHorizontal, CalendarPlus, Ban, Flag, Briefcase, Award, TrendingUp, UserCheck, StickyNote, Stethoscope, FileText, List, FileSpreadsheet } from 'lucide-react';
 import { Job, PlanningState, Worker, WorkerStatus, ContractType, ReinforcementGroup } from '../lib/types';
 import { isTimeOverlap, checkContinuityRisk, formatDateDMY, getWorkerDisplayName } from '../lib/utils';
 
@@ -13,6 +13,8 @@ interface PlanningBoardProps {
   onEditJob: (job: Job) => void;
   onDuplicateJob: (job: Job) => void;
   onShowWorkerList: (clientId: string, centerId: string, date: string) => void;
+  onExportAccessList: (centerId: string, date: string) => void;
+  highlightedWorker: string | null;
   draggedWorkerId: string | null;
   onDragStartFromBoard: (workerId: string, jobId: string) => void;
   onReorderJob: (sourceJobId: string, targetJobId: string) => void;
@@ -30,6 +32,8 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   onEditJob,
   onDuplicateJob,
   onShowWorkerList,
+  onExportAccessList,
+  highlightedWorker,
   draggedWorkerId,
   onDragStartFromBoard,
   onReorderJob,
@@ -337,16 +341,15 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                         onDrop={(e) => handleDrop(e, groupData.client?.id || '', 'client')}
                         className={`bg-white rounded-[24px] border shadow-sm overflow-hidden transition-all duration-200 ${isDragOverClient ? 'border-blue-400 ring-2 ring-blue-100 transform scale-[1.01]' : 'border-slate-200'}`}
                       >
-                        <div className="px-4 py-1.5 bg-slate-900 text-white flex items-center justify-between cursor-grab active:cursor-grabbing">
+                        <div className="px-4 py-0.5 bg-slate-900 text-white flex items-center justify-between cursor-grab active:cursor-grabbing">
                           <div className="flex items-center gap-3">
                             <div className="text-slate-500 hover:text-white transition-colors" title="Mover Grupo"><Move className="w-4 h-4" /></div>
-                            <div className="w-8 h-8 bg-white/20 backdrop-blur-md rounded-lg flex items-center justify-center font-black text-[10px]">{groupData.client?.logo || 'C'}</div>
                             <h3 className="text-[12px] font-black uppercase tracking-tight">{groupData.clientName}</h3>
                           </div>
                           <button 
                             onMouseDown={(e) => e.stopPropagation()}
                             onClick={() => onAddJob(groupData.client?.id || '', date)} 
-                            className="bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all flex items-center gap-1.5 border border-white/10"
+                            className="bg-white/10 hover:bg-white/20 text-white px-2 py-1 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all flex items-center gap-1 border border-white/10"
                           >
                             <Plus className="w-3 h-3" /> Nueva Tarea
                           </button>
@@ -361,10 +364,14 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                             const isFinishedManual = job.isFinished;
                             const isFinishedTime = !isCancelled && !isFinishedManual && ((isViewToday && currentHmm > job.endTime) || isViewPast);
                             
+                            // 🎯 LÓGICA DE RESALTADO DE TRABAJADOR
+                            const isWorkerHighlighted = highlightedWorker && job.assignedWorkerIds.includes(highlightedWorker);
+                            
                             let containerClass = 'transition-all relative';
                             if (isCancelled) containerClass += ' bg-[#FFD4D4] opacity-80 cursor-not-allowed';
                             else if (isFinishedManual || isFinishedTime) containerClass += ' bg-[#D1E3FF]';
                             else if (dragOverJobId === job.id) containerClass += ' bg-blue-50 ring-2 ring-blue-500 z-10';
+                            else if (isWorkerHighlighted) containerClass += ' bg-orange-50 ring-2 ring-orange-500 z-10 shadow-orange-200 shadow-lg';
                             else containerClass += ' bg-white hover:bg-slate-50/50';
 
                             // LÓGICA DE AGRUPACIÓN POR HORARIO DE OPERARIOS
@@ -428,25 +435,28 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                 <div className="lg:w-28 px-4 py-2 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0">
                                   <div className="flex items-center gap-1.5 text-slate-400 mb-0.5">
                                     <FileText className="w-2.5 h-2.5" />
-                                    <span className="text-[8px] font-black uppercase tracking-widest">Albarán</span>
+                                    <span className="text-[8px] font-black uppercase tracking-widest">ALB.</span>
+                                    {job.deliveryNote ? (
+                                      <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-100 truncate">
+                                        {job.deliveryNote}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-300 italic">-</span>
+                                    )}
                                   </div>
-                                  {job.deliveryNote ? (
-                                    <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100 truncate block">
-                                      {job.deliveryNote}
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-300 italic">-</span>
-                                  )}
                                 </div>
 
                                 {/* Columna TAREA + ACCIONES */}
-                                <div className="lg:w-48 px-4 py-2 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0 group/actions">
-                                  <div className="flex items-center justify-between mb-0.5">
-                                    <div className="flex items-center gap-1.5 text-slate-400">
-                                      <Plus className="w-2.5 h-2.5 rotate-45" />
-                                      <span className="text-[8px] font-black uppercase tracking-widest">Tarea</span>
+                                <div className="lg:w-64 px-4 py-1 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0 group/actions">
+                                  <div className="flex items-center justify-between">
+                                    {/* Columna A: Texto y Referencia */}
+                                    <div className="text-left">
+                                      <p className="text-[11px] font-black text-slate-900 leading-tight truncate">{job.customName || job.type}</p>
+                                      {job.ref && <p className="text-[8px] font-bold text-slate-400 truncate italic">Ref: {job.ref}</p>}
                                     </div>
-                                    <div className="flex items-center gap-1 z-30 relative">
+                                    
+                                    {/* Columna B: Iconos */}
+                                    <div className="grid grid-cols-2 gap-0.5 z-30 relative">
                                       <button 
                                         onClick={(e) => { e.stopPropagation(); onDuplicateJob(job); }} 
                                         onMouseDown={(e) => e.stopPropagation()}
@@ -471,11 +481,15 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                       >
                                         <List className="w-2.5 h-2.5" />
                                       </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); onExportAccessList(job.centerId, job.date); }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="p-0.5 text-slate-400 hover:text-green-700 transition-colors" 
+                                        title="Exportar listado Excel"
+                                      >
+                                        <FileSpreadsheet className="w-3 h-3" />
+                                      </button>
                                     </div>
-                                  </div>
-                                  <p className="text-[11px] font-black text-slate-900 leading-tight truncate">{job.customName || job.type}</p>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                      {job.ref && <p className="text-[8px] font-bold text-slate-400 truncate italic">Ref: {job.ref}</p>}
                                   </div>
                                 </div>
 
@@ -499,9 +513,16 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
 
                                 {/* Columna DOTACIÓN */}
                                 <div className="lg:w-24 px-4 py-2 border-b lg:border-b-0 lg:border-r border-slate-100 shrink-0">
-                                  <div className="flex items-center justify-between mb-1.5">
+                                  <div className="flex items-center justify-between mb-1">
                                     <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Operarios</span>
-                                    <span className="text-[9px] font-black text-slate-900">{job.assignedWorkerIds.length}/{job.requiredWorkers}</span>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[9px] font-black text-slate-900">{job.assignedWorkerIds.length}/{job.requiredWorkers}</span>
+                                      {job.isImposed && (
+                                        <span className="text-[6px] font-black text-orange-600 uppercase tracking-wider bg-orange-50 px-1 rounded leading-none">
+                                          SOLIC
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                                     <div className={`h-full transition-all duration-700 ${progress >= 100 ? 'bg-green-500' : 'bg-blue-600'}`} style={{ width: `${Math.min(progress, 100)}%` }} />
@@ -509,7 +530,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                 </div>
 
                                 {/* Columna EQUIPO ASIGNADO (Con soporte para franjas horarias / refuerzos) */}
-                                <div className="flex-1 px-4 py-2 flex flex-wrap gap-x-4 gap-y-2 items-center min-h-[44px]">
+                                <div className="flex-1 px-4 py-1 flex flex-wrap gap-x-4 gap-y-2 items-center min-h-[44px]">
                                   {sortedTimes.map(timeGroup => (
                                      <div key={timeGroup} className="flex items-center gap-2 border-r border-slate-50 last:border-0 pr-4 last:pr-0">
                                         {/* CABECERA DE FRANJA (Solo si es distinta a la de la tarea) */}
@@ -562,6 +583,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                                     onContextMenu={(e) => handleContextMenu(e, worker.id)}
                                                     title={dailyNote ? dailyNote.text : undefined}
                                                     className={`flex items-center gap-1.5 pl-1.5 pr-0.5 py-0.5 rounded-lg border transition-all shadow-sm text-[10px] font-black uppercase relative ${!isCancelled ? 'cursor-grab active:cursor-grabbing' : ''} ${
+                                                      highlightedWorker === worker.id ? 'bg-orange-500 border-orange-600 text-white ring-2 ring-orange-400 shadow-orange-300 shadow-lg' :
                                                       hasOverlap ? 'bg-red-50 border-red-200 text-red-700 ring-1 ring-red-100' : 
                                                       !isFirstJob ? 'bg-green-100 border-green-300 text-green-800' : 
                                                       'bg-white border-slate-200 text-slate-700'
@@ -740,7 +762,29 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                 {/* Lista de operarios filtrados */}
                 <div className="max-h-40 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl bg-slate-50">
                   {planning.workers
-                    .filter(w => !w.isArchived && w.status === WorkerStatus.DISPONIBLE)
+                    .filter(w => !w.isArchived)
+                    .filter(w => {
+                      // 🎯 USAR LA MISMA LÓGICA DE DISPONIBILIDAD QUE EL SIDEBAR
+                      const currentDate = reinforcementModal?.jobId ? 
+                        planning.jobs.find(j => j.id === reinforcementModal.jobId)?.date || new Date().toISOString().split('T')[0] :
+                        new Date().toISOString().split('T')[0];
+                      
+                      // Si el estado es "NO DISPONIBLE", comprobar si ya ha expirado
+                      const isUnavailableStatus = [
+                        WorkerStatus.VACACIONES, 
+                        WorkerStatus.BAJA_MEDICA, 
+                        WorkerStatus.BAJA_PATERNIDAD
+                      ].includes(w.status);
+
+                      if (isUnavailableStatus) {
+                         // Si no tiene fecha fin, o la fecha fin es futura, no mostrar
+                         if (!w.statusEndDate || w.statusEndDate >= currentDate) {
+                            return false;
+                         }
+                      }
+                      
+                      return true;
+                    })
                     .filter(w => 
                       reinforcementWorkerSearch === '' || 
                       w.name.toLowerCase().includes(reinforcementWorkerSearch.toLowerCase()) ||

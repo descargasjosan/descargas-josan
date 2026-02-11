@@ -11,6 +11,7 @@ interface WorkerSidebarProps {
   onSelectWorker: (id: string) => void;
   onUpdateWorkerStatus: (workerId: string, status: WorkerStatus) => void;
   getCorrectWorkerStatus?: (worker: Worker) => WorkerStatus;
+  onWorkerHighlight?: (workerId: string) => void;
 }
 
 const WorkerSidebar: React.FC<WorkerSidebarProps> = ({ 
@@ -19,7 +20,8 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
   onDragStart,
   selectedWorkerId,
   onSelectWorker,
-  getCorrectWorkerStatus
+  getCorrectWorkerStatus,
+  onWorkerHighlight
 }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [availabilityFilter, setAvailabilityFilter] = React.useState<'all' | 'free' | 'assigned'>('all');
@@ -239,8 +241,13 @@ const WorkerSidebar: React.FC<WorkerSidebarProps> = ({
               key={worker.id}
               draggable
               onDragStart={() => onDragStart(worker)}
-              onClick={() => onSelectWorker(worker.id)}
-              title={`${getWorkerDisplayName(worker)}\nTel: ${worker.phone}`}
+              onClick={() => {
+                onSelectWorker(worker.id);
+                if (onWorkerHighlight) {
+                  onWorkerHighlight(worker.id);
+                }
+              }}
+              title={`${getWorkerDisplayName(worker)}\nTel: ${worker.phone}\nClick para resaltar en planificación`}
               className={`
                 group flex items-center gap-2 p-2 border-b border-slate-50 cursor-grab active:cursor-grabbing transition-all hover:bg-slate-50
                 ${isSelected ? 'bg-blue-50/80 border-blue-100' : ''}

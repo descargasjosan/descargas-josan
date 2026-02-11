@@ -5,7 +5,8 @@ import {
   ChevronDown, CheckCircle2, Info, Loader2, Cloud, RotateCcw, CloudOff, ListTodo, 
   Filter, ArrowUpDown, CheckCircle, XCircle, Sparkles, ChevronLeft, ChevronRight, LayoutGrid,
   Calendar as CalendarIcon, Table, DownloadCloud, CalendarDays, MessageCircle, Copy, TrendingUp,
-  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight, StickyNote
+  ClipboardList, Hash, FileText, Phone, GraduationCap, Fuel, Send, FileSpreadsheet, ArrowRight, StickyNote,
+  HeartPulse
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WorkerSidebar from './components/WorkerSidebar';
@@ -16,7 +17,7 @@ import FleetManager from './components/FleetManager';
 import LoginScreen from './components/LoginScreen';
 import { MOCK_WORKERS, MOCK_CLIENTS, MOCK_JOBS, AVAILABLE_COURSES, MOCK_STANDARD_TASKS, WORKER_ROLES, MOCK_VEHICLES } from './lib/constants'; 
 import { getWorkerDisplayName, getWorkerSSFormat, addOrUpdateStatusRecord, removeStatusRecord, calculateDaysBetween, getCurrentWorkerStatus, getNextStatusChange, validateAssignment, getPreviousWeekday, isHoliday, formatDateDMY } from './lib/utils';
-import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course } from './lib/types';
+import { PlanningState, Worker, Job, JobType, WorkerStatus, Client, ViewType, ContractType, Holiday, WorkCenter, StandardTask, DailyNote, RegularTask, FuelRecord, Vehicle, VehicleAssignment, NoteType, ReinforcementGroup, Course, MedicalCourse, MedicalAlert } from './lib/types';
 import { supabase } from '../supabaseClient';
 
 // 🔍 SISTEMA DE DETECCIÓN Y LOGGING PARA EDGE
@@ -459,7 +460,7 @@ const CalendarSelector: React.FC<CalendarSelectorProps> = ({ currentDate, custom
 };
 
 const App: React.FC = () => {
-  console.log('🚀 APP v1.2.2 - Compatibilidad estado "Activo"');
+  console.log('🚀 APP v1.5.0 - Localización inteligente + Exportación Excel mejorada');
   
    const [session, setSession] = useState<any>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -492,7 +493,11 @@ const App: React.FC = () => {
     jobs: [], // Array vacío - se cargará desde Supabase
     customHolidays: [], 
     notifications: {},
-    courses: [], // Nuevo sistema de cursos
+    courses: [], // Sistema de cursos general (se mantendrá para compatibilidad)
+    medicalCourses: [], // 🏥 Cursos y reconocimientos médicos
+    medicalAlerts: [], // ⚠️ Alertas médicas calculadas
+    selectedMedicalTab: 'dashboard', // 📋 Pestaña activa en Salud Laboral
+    editingMedicalCourse: null, // 📝 Curso médico en edición
     standardTasks: [], // Array vacío - se cargará desde Supabase
     dailyNotes: [],
     fuelRecords: [],
@@ -904,6 +909,11 @@ const App: React.FC = () => {
   const [editingStatusRecord, setEditingStatusRecord] = useState<{id?: string, status: WorkerStatus, startDate: string, endDate: string} | null>(null);
   const [showAddRecordForm, setShowAddRecordForm] = useState(false);
   const [duplicatingJob, setDuplicatingJob] = useState<Job | null>(null);
+  
+  // 📅 Estados para modal de días trabajados
+  const [diasTrabajadosModal, setDiasTrabajadosModal] = useState<{workerId: string, workerName: string} | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(new Date());
+  const [calculatedDays, setCalculatedDays] = useState<{total: number, days: Date[], details: any[]} | null>(null);
   const [duplicationDate, setDuplicationDate] = useState<string>('');
   const [keepWorkersOnDuplicate, setKeepWorkersOnDuplicate] = useState(false);
   const [newCourseName, setNewCourseName] = useState('');
@@ -921,10 +931,646 @@ const App: React.FC = () => {
     liters: '', cost: '', odometer: '', date: new Date().toISOString().split('T')[0]
   });
 
+  // 🏥 Estado para gestión médica dinámica
+  const [availableCourses, setAvailableCourses] = useState<string[]>([
+    'Curso de Manipulador de Alimentos',
+    'Curso de Carretillero',
+    'Curso de Prevención de Riesgos Laborales',
+    'Curso de Primeros Auxilios',
+    'Curso de Altura',
+    'Curso de Electricidad Básica',
+    'Curso de Soldadura',
+    'Curso de Montaje de Andamios'
+  ]);
+  const [availableProviders, setAvailableProviders] = useState<string[]>([
+    'Mutua',
+    'Servicio Médico', 
+    'Recursos Laborales',
+    'Otro'
+  ]);
+  const [medicalCourseName, setMedicalCourseName] = useState('');
+  const [medicalProviderName, setMedicalProviderName] = useState('');
+  const [showAddMedicalCourse, setShowAddMedicalCourse] = useState(false);
+  const [showAddMedicalProvider, setShowAddMedicalProvider] = useState(false);
+  const [workerSearchFilter, setWorkerSearchFilter] = useState('');
+  const [medicalWorkerFilter, setMedicalWorkerFilter] = useState(''); // Filtro general de operarios en Salud Laboral
+  
+  // 📊 ESTADO PARA TRACKING DE EXPORTACIONES
+  const [exportHistory, setExportHistory] = useState(() => {
+    const saved = localStorage.getItem('exportHistory');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  // 🔄 FUNCIÓN PARA ACTUALIZAR HISTORIAL COMPARTIDO
+  const updateExportHistory = useCallback((newHistory) => {
+    setExportHistory(newHistory);
+    localStorage.setItem('exportHistory', JSON.stringify(newHistory));
+  }, []);
+
+  // 🎯 ESTADO PARA RESALTADO DE TRABAJADORES
+  const [highlightedWorker, setHighlightedWorker] = useState<string | null>(null);
+  const [highlightTimeout, setHighlightTimeout] = useState<NodeJS.Timeout | null>(null);
+
+  // 🏷️ VERSIÓN ACTUAL DE LA APLICACIÓN
+  const APP_VERSION = 'v1.5.0';
+
   const showNotification = useCallback((message: string, type: 'error' | 'success' | 'warning' | 'info' = 'error') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
   }, []);
+
+  // 📅 FUNCIÓN PARA ABRIR MODAL DE DÍAS TRABAJADOS
+  const openDiasTrabajadosModal = useCallback((workerId: string) => {
+    const worker = planning.workers.find(w => w.id === workerId);
+    if (worker && worker.contractType === ContractType.FIJO_DISCONTINUO) {
+      setDiasTrabajadosModal({
+        workerId: worker.id,
+        workerName: getWorkerDisplayName(worker)
+      });
+      setSelectedMonth(new Date());
+      setCalculatedDays(null);
+    }
+  }, [planning.workers]);
+
+  // 🎯 FUNCIÓN PARA RESALTAR TRABAJADOR
+  const handleWorkerHighlight = useCallback((workerId: string) => {
+    // Limpiar timeout anterior si existe
+    if (highlightTimeout) {
+      clearTimeout(highlightTimeout);
+    }
+
+    // Si ya está resaltado, quitar resaltado
+    if (highlightedWorker === workerId) {
+      setHighlightedWorker(null);
+      setHighlightTimeout(null);
+      return;
+    }
+
+    // Resaltar nuevo trabajador
+    setHighlightedWorker(workerId);
+
+    // Auto-desactivar después de 10 segundos
+    const timeout = setTimeout(() => {
+      setHighlightedWorker(null);
+      setHighlightTimeout(null);
+    }, 10000);
+
+    setHighlightTimeout(timeout);
+  }, [highlightedWorker, highlightTimeout]);
+
+  // 📅 FUNCIÓN PARA CALCULAR DÍAS TRABAJADOS
+  const calculateDiasTrabajados = useCallback((workerId: string, month: Date) => {
+    try {
+      console.log('🎯 INICIANDO CÁLCULO PARA:', workerId, month);
+      
+      const worker = planning.workers.find(w => w.id === workerId);
+      if (!worker || worker.contractType !== ContractType.FIJO_DISCONTINUO) return null;
+
+      // Obtener primer y último día del mes
+      const year = month.getFullYear();
+      const monthNum = month.getMonth();
+      const firstDay = new Date(year, monthNum, 1);
+      const lastDay = new Date(year, monthNum + 1, 0);
+      
+      console.log('📅 RANGO DE FECHAS:', firstDay, lastDay);
+      
+      // Obtener todas las tareas del trabajador en el mes
+      const workerJobs = planning.jobs.filter(job => 
+        job.assignedWorkerIds.includes(workerId) &&
+        job.date >= firstDay.toISOString().split('T')[0] &&
+        job.date <= lastDay.toISOString().split('T')[0] &&
+        !job.isCancelled
+      );
+
+      console.log('📋 TAREAS ENCONTRADAS:', workerJobs.length);
+
+      // Identificar días trabajados (días con tareas)
+      const workedDays = new Set(workerJobs.map(job => job.date));
+      console.log('✅ DÍAS TRABAJADOS:', Array.from(workedDays));
+      
+      // Generar todos los días del mes
+      const allDays = [];
+      for (let day = 1; day <= lastDay.getDate(); day++) {
+        // 🎯 FORZAR FECHA LOCAL SIN PROBLEMAS DE ZONA HORARIA
+        const currentDate = new Date(year, monthNum, day, 12, 0, 0); // Mediodía para evitar cambios de día
+        const dateStr = currentDate.toISOString().split('T')[0];
+        const isWorked = workedDays.has(dateStr);
+        const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
+        
+        allDays.push({
+          date: currentDate,
+          dateStr: dateStr,
+          isWorked,
+          isWeekend,
+          jobs: workerJobs.filter(job => job.date === dateStr),
+          jobCount: workerJobs.filter(job => job.date === dateStr).length
+        });
+      }
+      
+      console.log('📆 TODOS LOS DÍAS DEL MES:', allDays.length);
+      
+      // Identificar bloques de alta (días trabajados + fines de semana trabajados entre ellos)
+      const workedDates = allDays.filter(d => d.isWorked).map(d => d.date);
+      console.log('🎯 FECHAS TRABAJADAS:', workedDates.map(d => d.toISOString().split('T')[0]));
+      
+      // 🎯 PRIMERO CALCULAR FINES DE SEMANA TRABAJADOS
+      const weekendAndHolidaysWorked: Date[] = [];
+      
+      console.log('🔍 ANALIZANDO FINES DE SEMANA Y FESTIVOS...');
+      
+      // 🎯 SOLO ANALIZAR SI ES FIN DE SEMANA O FESTIVO Y NO TIENE TRABAJO ASIGNADO
+      // No analizar días que ya tienen trabajo asignado
+      allDays.forEach((day, index) => {
+        try {
+          const dateStr = day.dateStr;
+          const isWorked = workedDays.has(dateStr);
+          const isWeekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+          const holiday = isHoliday(dateStr, planning.customHolidays);
+          
+          // 🎯 SOLO ANALIZAR SI ES FIN DE SEMANA O FESTIVO Y NO TIENE TRABAJO ASIGNADO
+          if ((isWeekend || holiday) && !isWorked) {
+            console.log(`📅 Analizando ${dateStr} (fin de semana: ${isWeekend}, festivo: ${!!holiday}, isWorked: ${isWorked})`);
+            console.log(`🔍 getDay(): ${day.date.getDay()} (0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb)`);
+            
+            // 🎯 BUSCAR DÍA ANTERIOR LABORABLE - usar la misma fecha base
+            let prevDayDate = new Date(day.date.getTime());
+            prevDayDate.setDate(prevDayDate.getDate() - 1);
+            
+            while (prevDayDate.getMonth() === monthNum && prevDayDate.getFullYear() === year && 
+                   (prevDayDate.getDay() === 0 || prevDayDate.getDay() === 6 || 
+                    isHoliday(prevDayDate.toISOString().split('T')[0], planning.customHolidays))) {
+              console.log(`🔍 ${prevDayDate.toISOString().split('T')[0]} es fin de semana/festivo (getDay: ${prevDayDate.getDay()}), buscando día anterior...`);
+              prevDayDate.setDate(prevDayDate.getDate() - 1);
+            }
+            
+            // 🎯 BUSCAR DÍA POSTERIOR LABORABLE - usar la misma fecha base
+            let nextDayDate = new Date(day.date.getTime());
+            nextDayDate.setDate(nextDayDate.getDate() + 1);
+            
+            while (nextDayDate.getMonth() === monthNum && nextDayDate.getFullYear() === year && 
+                   (nextDayDate.getDay() === 0 || nextDayDate.getDay() === 6 || 
+                    isHoliday(nextDayDate.toISOString().split('T')[0], planning.customHolidays))) {
+              console.log(`🔍 ${nextDayDate.toISOString().split('T')[0]} es fin de semana/festivo (getDay: ${nextDayDate.getDay()}), buscando día posterior...`);
+              nextDayDate.setDate(nextDayDate.getDate() + 1);
+            }
+            
+            const prevDayStr = prevDayDate.toISOString().split('T')[0];
+            const nextDayStr = nextDayDate.toISOString().split('T')[0];
+            
+            console.log(`🔍 Día anterior: ${prevDayStr} (getDay: ${prevDayDate.getDay()}), Día posterior: ${nextDayStr} (getDay: ${nextDayDate.getDay()})`);
+            console.log(`🔍 Días trabajados disponibles: ${workedDates.map(d => d.toISOString().split('T')[0]).join(', ')}`);
+            
+            // Verificar si hay trabajo el día anterior y posterior laborable
+            const hasWorkBefore = workedDates.some(workedDate => 
+              workedDate.toISOString().split('T')[0] === prevDayStr
+            );
+            const hasWorkAfter = workedDates.some(workedDate => 
+              workedDate.toISOString().split('T')[0] === nextDayStr
+            );
+            
+            console.log(`✅ Trabajo前后: antes=${hasWorkBefore} (${prevDayStr}), después=${hasWorkAfter} (${nextDayStr})`);
+            
+            // Solo cuenta si hay trabajo前后
+            if (hasWorkBefore && hasWorkAfter) {
+              weekendAndHolidaysWorked.push(day.date);
+              console.log(`✅ ${dateStr} cuenta como trabajado`);
+            } else {
+              console.log(`❌ ${dateStr} NO cuenta como trabajado - falta trabajo前后`);
+            }
+          }
+        } catch (error) {
+          console.error(`❌ Error analizando día ${index}:`, error);
+        }
+      });
+      
+      console.log('🎯 FINES DE SEMANA/FESTIVOS TRABAJADOS:', weekendAndHolidaysWorked.length);
+      
+      // 🎯 INCLUIR FINES DE SEMANA TRABAJADOS EN EL ANÁLISIS DE BLOQUES
+      const allRelevantDates = [...workedDates];
+      weekendAndHolidaysWorked.forEach(weekendDate => {
+        if (!allRelevantDates.some(date => date.toISOString().split('T')[0] === weekendDate.toISOString().split('T')[0])) {
+          allRelevantDates.push(weekendDate);
+        }
+      });
+      
+      // Ordenar todas las fechas relevantes
+      allRelevantDates.sort((a, b) => a.getTime() - b.getTime());
+      console.log('🎯 TODAS LAS FECHAS RELEVANTES:', allRelevantDates.map(d => d.toISOString().split('T')[0]));
+      
+      const altaPeriods: {start: Date, end: Date}[] = [];
+      
+      if (allRelevantDates.length > 0) {
+        let currentStart = allRelevantDates[0];
+        let currentEnd = allRelevantDates[0];
+        
+        for (let i = 1; i < allRelevantDates.length; i++) {
+          const prevDate = allRelevantDates[i - 1];
+          const currentDate = allRelevantDates[i];
+          const daysDiff = Math.floor((currentDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24));
+          
+          // 🎯 UNIR SI SON DÍAS CONSECUTIVOS (diferencia de 1 día)
+          if (daysDiff === 1) {
+            currentEnd = currentDate;
+          } else {
+            altaPeriods.push({ start: currentStart, end: currentEnd });
+            currentStart = currentDate;
+            currentEnd = currentDate;
+          }
+        }
+        altaPeriods.push({ start: currentStart, end: currentEnd });
+      }
+      
+      console.log('📊 PERÍODOS DE ALTA:', altaPeriods.length);
+      altaPeriods.forEach((period, index) => {
+        console.log(`📊 Período ${index + 1}: ${period.start.toISOString().split('T')[0]} → ${period.end.toISOString().split('T')[0]}`);
+      });
+      
+      // Calcular días de alta (incluyendo fines de semana entre bloques)
+      const altaDays = [];
+      altaPeriods.forEach(period => {
+        let current = new Date(period.start);
+        while (current <= period.end) {
+          altaDays.push(new Date(current));
+          current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+        }
+      });
+      
+      console.log('📅 DÍAS DE ALTA:', altaDays.length);
+      
+      // Filtrar días que están en alta
+      const finalDays = allDays.filter(day => {
+        return altaDays.some(altaDay => 
+          altaDay.getDate() === day.date.getDate() &&
+          altaDay.getMonth() === day.date.getMonth() &&
+          altaDay.getFullYear() === day.date.getFullYear()
+        );
+      });
+      
+      // 🎯 CONTADORES CORRECTOS
+      const workedDaysCount = workedDates.length;
+      const weekendAndHolidaysCount = weekendAndHolidaysWorked.length;
+      const totalDaysCount = workedDaysCount + weekendAndHolidaysCount;
+      
+      // 🎯 ACTUALIZAR DETAILS PARA INCLUIR CORRECTAMENTE FINES DE SEMANA/FESTIVOS
+      const updatedDetails = finalDays.map(day => {
+        const dateStr = day.dateStr;
+        const isWorked = workedDays.has(dateStr);
+        const isWeekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+        const holiday = isHoliday(dateStr, planning.customHolidays);
+        
+        // 🎯 VERIFICAR SI ES FIN DE SEMANA/FESTIVO TRABAJADO
+        const isWeekendOrHolidayWorked = weekendAndHolidaysWorked.some(weekendDay => 
+          weekendDay.toISOString().split('T')[0] === dateStr
+        );
+        
+        // 🎯 LÓGICA CORRECTA:
+        // - isWorked: true solo si tiene tareas asignadas
+        // - isWeekendOrHolidayWorked: true si es fin de semana que cuenta como trabajado
+        // - Visualmente: mostrar "FIN DE SEMANA" pero contar en total
+        
+        const jobs = workerJobs.filter(job => job.date === dateStr);
+        
+        return {
+          date: day.date,
+          dateStr: dateStr,
+          isWorked: isWorked, // 🎯 SOLO true si tiene tareas asignadas
+          isWeekend: isWeekend,
+          isWeekendOrHolidayWorked: isWeekendOrHolidayWorked, // 🎯 NUEVO: indica si cuenta como trabajado sin tener tareas
+          jobs: jobs,
+          jobCount: jobs.length
+        };
+      });
+      
+      console.log('📊 RESUMEN FINAL:', {
+        workedDaysCount,
+        weekendAndHolidaysCount,
+        totalDaysCount,
+        finalDaysCount: updatedDetails.length,
+        weekendAndHolidaysWorked: weekendAndHolidaysWorked.map(d => d.toISOString().split('T')[0])
+      });
+      
+      return {
+        total: totalDaysCount,
+        days: finalDays,
+        workedDays: workedDates,
+        altaPeriods,
+        details: updatedDetails,
+        weekendAndHolidaysWorked: weekendAndHolidaysWorked
+      };
+    } catch (error) {
+      console.error('❌ Error en calculateDiasTrabajados:', error);
+      showNotification('Error al calcular días trabajados', 'error');
+      return null;
+    }
+  }, [planning.workers, planning.jobs, planning.customHolidays]);
+
+  // 📊 EXPORTACIÓN EXCEL PARA LISTADO DE ACCESOS
+  const exportWorkerAccessList = useCallback((centerId: string, date: string) => {
+    try {
+      // 🔄 SINCRONIZAR CON ÚLTIMO ESTADO ANTES DE EXPORTAR
+      const currentHistory = JSON.parse(localStorage.getItem('exportHistory') || '{}');
+      
+      // Obtener centro y cliente
+      const center = planning.clients
+        .flatMap(client => client.centers || [])
+        .find(c => c.id === centerId);
+      
+      const client = planning.clients.find(c => 
+        c.centers?.some(center => center.id === centerId)
+      );
+
+      if (!center || !client) {
+        showNotification('No se encontró el centro o cliente', 'error');
+        return;
+      }
+
+      // Filtrar tareas para ese centro y fecha específica
+      const jobsForDate = planning.jobs.filter(job => 
+        job.date === date && 
+        job.centerId === centerId &&
+        !job.isCancelled
+      );
+
+      // Obtener todos los operarios asignados a esas tareas
+      const assignedWorkerIds = new Set<string>();
+      jobsForDate.forEach(job => {
+        job.assignedWorkerIds.forEach(workerId => {
+          assignedWorkerIds.add(workerId);
+        });
+      });
+
+      // Obtener datos completos de los operarios
+      const currentWorkers = Array.from(assignedWorkerIds).map(workerId => {
+        const worker = planning.workers.find(w => w.id === workerId);
+        return worker;
+      }).filter(Boolean);
+
+      // 📊 LÓGICA INTELIGENTE DE EXPORTACIÓN
+      const exportKey = `${centerId}-${date}`;
+      const previousExport = currentHistory[exportKey];
+      const today = new Date().toDateString();
+      
+      // Resetear si es un nuevo día
+      if (previousExport?.date !== today) {
+        delete currentHistory[exportKey];
+      }
+
+      // Detectar si es primera exportación o hay nuevos operarios
+      const isFirstExport = !currentHistory[exportKey];
+      const previousWorkerIds = currentHistory[exportKey]?.workerIds || [];
+      const newWorkers = currentWorkers.filter(worker => 
+        !previousWorkerIds.includes(worker.id)
+      );
+
+      // Determinar qué operarios exportar
+      const workersToExport = isFirstExport ? currentWorkers : newWorkers;
+      
+      if (!isFirstExport && newWorkers.length === 0) {
+        showNotification('No hay nuevos operarios para exportar', 'info');
+        return;
+      }
+
+      // Formatear fecha para el nombre del archivo
+      const formattedDate = new Date(date).toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit', 
+        year: 'numeric'
+      }).replace(/\//g, '-');
+
+      // Generar nombre de archivo con contador
+      let fileName = `LISTADO ACCESO ${client.name.toUpperCase()} ${formattedDate}`;
+      if (!isFirstExport) {
+        const exportCount = Object.keys(currentHistory).filter(key => 
+          key.startsWith(`${centerId}-${date}`)
+        ).length + 1;
+        fileName += `-${exportCount}`;
+      }
+      fileName += '.xlsx';
+
+      // Crear libro de Excel
+      const wb = XLSX.utils.book_new();
+      
+      // Crear datos para Excel
+      const excelData = [
+        // Fila 1: Título (en la primera celda, se combinará después)
+        [`${fileName.replace('.xlsx', '')}`],
+        // Fila 2: Cabeceras
+        ['NIF', 'NOMBRE', 'APELLIDOS', 'EMPRESA'],
+        // Filas 3+: Datos de operarios (separando nombre y apellidos)
+        ...workersToExport.map(worker => {
+          // Separar nombre y apellidos
+          const nameParts = (worker.name || '').split(' ');
+          const firstName = nameParts[0] || '';
+          const lastName = nameParts.slice(1).join(' ') || (worker.surname || '');
+          
+          return [
+            worker.dni || '',
+            firstName,
+            lastName,
+            'DESCARGAS JOSAN SL'
+          ];
+        })
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(excelData);
+      
+      // Combinar celdas para el título (A1:D1)
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }];
+
+      // Ajustar anchos de columna
+      ws['!cols'] = [
+        { wch: 15 }, // Columna A: NIF
+        { wch: 20 }, // Columna B: Nombre
+        { wch: 25 }, // Columna C: Apellidos
+        { wch: 25 }  // Columna D: Empresa
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Listado Acceso');
+
+      // 🔄 ACTUALIZAR HISTORIAL COMPARTIDO
+      const updatedHistory = {
+        ...currentHistory,
+        [exportKey]: {
+          date: today,
+          workerIds: Array.from(assignedWorkerIds),
+          exportCount: (currentHistory[exportKey]?.exportCount || 0) + 1,
+          lastExportTime: new Date().toISOString()
+        }
+      };
+      
+      updateExportHistory(updatedHistory);
+
+      // Generar archivo y descargar
+      XLSX.writeFile(wb, fileName);
+
+      const message = isFirstExport 
+        ? `Listado completo exportado: ${fileName}`
+        : `Listado de nuevos operarios exportado: ${fileName} (${newWorkers.length} nuevos)`;
+      
+      showNotification(message, 'success');
+    } catch (error) {
+      console.error('Error al exportar listado:', error);
+      showNotification('Error al exportar el listado', 'error');
+    }
+  }, [planning, showNotification, updateExportHistory]);
+  const calculateMedicalAlerts = useCallback((courses: MedicalCourse[], workers: Worker[]): MedicalAlert[] => {
+    const today = new Date();
+    const alerts: MedicalAlert[] = [];
+    
+    courses.forEach(course => {
+      if (!course.expiryDate) return; // Solo cursos con fecha de caducidad
+      
+      const expiryDate = new Date(course.expiryDate);
+      const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      
+      let alertLevel: 'critical' | 'warning';
+      let status: 'active' | 'expired' | 'pending';
+      
+      if (daysUntilExpiry < 0) {
+        alertLevel = 'critical'; // 🔴 Caducado
+        status = 'expired';
+      } else if (daysUntilExpiry <= 30) {
+        alertLevel = 'warning'; // 🟡 Próximo (0-30 días)
+        status = 'active';
+      } else {
+        // No crear alerta para más de 30 días
+        return;
+      }
+      
+      // Crear alerta para cada operario asignado
+      course.assignedWorkerIds.forEach(workerId => {
+        const worker = workers.find(w => w.id === workerId);
+        if (worker) {
+          const courseName = course.type === 'recognition' 
+            ? '🏥 Reconocimiento Médico' 
+            : course.name || '📚 Curso Formación Laboral';
+            
+          alerts.push({
+            id: `${course.id}-${workerId}`,
+            workerId: worker.id,
+            courseId: course.id,
+            courseName,
+            workerName: worker.name,
+            type: course.type,
+            provider: course.provider,
+            expiryDate: course.expiryDate,
+            daysUntilExpiry,
+            alertLevel
+          });
+        }
+      });
+    });
+    
+    return alerts.sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
+  }, []);
+
+  const addMedicalCourse = useCallback(async (course: Omit<MedicalCourse, 'id' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      const newCourse: MedicalCourse = {
+        ...course,
+        id: Date.now().toString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      
+      setPlanning(prev => {
+        const updatedCourses = [...prev.medicalCourses, newCourse];
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico añadido correctamente', 'success');
+    } catch (error) {
+      console.error('Error añadiendo registro médico:', error);
+      showNotification('Error al añadir el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  const updateMedicalCourse = useCallback(async (id: string, course: Partial<MedicalCourse>) => {
+    try {
+      setPlanning(prev => {
+        const updatedCourses = prev.medicalCourses.map(c => 
+          c.id === id 
+            ? { ...c, ...course, updatedAt: new Date().toISOString() }
+            : c
+        );
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico actualizado correctamente', 'success');
+    } catch (error) {
+      console.error('Error actualizando registro médico:', error);
+      showNotification('Error al actualizar el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  const deleteMedicalCourse = useCallback(async (id: string) => {
+    try {
+      setPlanning(prev => {
+        const updatedCourses = prev.medicalCourses.filter(c => c.id !== id);
+        const updatedAlerts = calculateMedicalAlerts(updatedCourses, prev.workers);
+        
+        return {
+          ...prev,
+          medicalCourses: updatedCourses,
+          medicalAlerts: updatedAlerts
+        };
+      });
+      
+      showNotification('Registro médico eliminado correctamente', 'success');
+    } catch (error) {
+      console.error('Error eliminando registro médico:', error);
+      showNotification('Error al eliminar el registro médico', 'error');
+    }
+  }, [calculateMedicalAlerts, showNotification]);
+
+  // 🏥 FUNCIONES PARA GESTIÓN DINÁMICA
+  const addNewMedicalCourse = useCallback(() => {
+    if (medicalCourseName.trim() && !availableCourses.includes(medicalCourseName.trim())) {
+      setAvailableCourses(prev => [...prev, medicalCourseName.trim()]);
+      setMedicalCourseName('');
+      setShowAddMedicalCourse(false);
+      showNotification('Curso añadido correctamente', 'success');
+    }
+  }, [medicalCourseName, availableCourses, showNotification]);
+
+  const removeMedicalCourse = useCallback((courseToRemove: string) => {
+    setAvailableCourses(prev => prev.filter(course => course !== courseToRemove));
+    showNotification('Curso eliminado correctamente', 'success');
+  }, [showNotification]);
+
+  const addNewMedicalProvider = useCallback(() => {
+    if (medicalProviderName.trim() && !availableProviders.includes(medicalProviderName.trim())) {
+      setAvailableProviders(prev => [...prev, medicalProviderName.trim()]);
+      setMedicalProviderName('');
+      setShowAddMedicalProvider(false);
+      showNotification('Proveedor añadido correctamente', 'success');
+    }
+  }, [medicalProviderName, availableProviders, showNotification]);
+
+  const removeMedicalProvider = useCallback((providerToRemove: string) => {
+    setAvailableProviders(prev => prev.filter(provider => provider !== providerToRemove));
+    showNotification('Proveedor eliminado correctamente', 'success');
+  }, [showNotification]);
+
+  // 🏥 EFECTO PARA CALCULAR ALERTAS MÉDICAS AUTOMÁTICAMENTE
+  useEffect(() => {
+    const updatedAlerts = calculateMedicalAlerts(planning.medicalCourses, planning.workers);
+    if (JSON.stringify(updatedAlerts) !== JSON.stringify(planning.medicalAlerts)) {
+      setPlanning(prev => ({ ...prev, medicalAlerts: updatedAlerts }));
+    }
+  }, [planning.medicalCourses, planning.workers, calculateMedicalAlerts]);
 
   // 🔄 SINCRONIZACIÓN SIMPLE - ESCUCHAR CAMBIOS DE OTROS USUARIOS
   useEffect(() => {
@@ -2502,6 +3148,7 @@ const App: React.FC = () => {
             <button onClick={() => setView('compact')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'compact' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Vista Compacta"><Table className="w-6 h-6" /></button>
             <button onClick={() => setShowSSReport(true)} className="p-3 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-all flex justify-center" title="Reporte SS"><ListTodo className="w-6 h-6" /></button>
             <button onClick={() => setView('workers')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'workers' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión Operarios"><Users className="w-6 h-6" /></button>
+            <button onClick={() => setView('medical')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'medical' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Salud Laboral"><HeartPulse className="w-6 h-6" /></button>
             <button onClick={() => setView('clients')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'clients' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión Clientes"><Building2 className="w-6 h-6" /></button>
             <button onClick={() => setView('databases')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'databases' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Bases de Datos"><Database className="w-6 h-6" /></button>
             <button onClick={() => setView('fleet')} className={`p-3 rounded-xl transition-all flex justify-center ${view === 'fleet' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Gestión de Flota"><Car className="w-6 h-6" /></button>
@@ -2514,14 +3161,15 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden relative">
          {(view === 'planning' || view === 'fleet') && (
            <WorkerSidebar 
-             workers={planning.workers} 
-             planning={planning}
-             selectedWorkerId={selectedWorkerId}
-             onSelectWorker={setSelectedWorkerId}
-             onUpdateWorkerStatus={handleUpdateWorkerStatus}
-             onDragStart={handleDragStart}
-             getCorrectWorkerStatus={getCorrectWorkerStatus}
-           />
+            workers={planning.workers} 
+            planning={planning}
+            selectedWorkerId={selectedWorkerId}
+            onSelectWorker={setSelectedWorkerId}
+            onUpdateWorkerStatus={handleUpdateWorkerStatus}
+            onDragStart={handleDragStart}
+            getCorrectWorkerStatus={getCorrectWorkerStatus}
+            onWorkerHighlight={handleWorkerHighlight}
+          />
          )}
 
          {view === 'planning' && (
@@ -2557,7 +3205,7 @@ const App: React.FC = () => {
                       </button>
                    </div>
                 </header>
-                <PlanningBoard planning={planning} datesToShow={datesToShow} onDropWorker={handleAssignWorker} onRemoveWorker={handleRemoveWorker} onAddJob={handleOpenNewJob} onEditJob={setEditingJob} onDuplicateJob={handleOpenDuplicate} onShowWorkerList={handleShowWorkerList} onDragStartFromBoard={(wId) => setDraggedWorkerId(wId)} onReorderJob={handleReorderJobs} onReorderClient={handleReorderClients} onEditNote={handleOpenNote} onUpdateJobReinforcementGroups={handleUpdateJobReinforcementGroups} draggedWorkerId={draggedWorkerId} />
+                <PlanningBoard planning={planning} datesToShow={datesToShow} onDropWorker={handleAssignWorker} onRemoveWorker={handleRemoveWorker} onAddJob={handleOpenNewJob} onEditJob={setEditingJob} onDuplicateJob={handleOpenDuplicate} onShowWorkerList={handleShowWorkerList} onExportAccessList={exportWorkerAccessList} highlightedWorker={highlightedWorker} onDragStartFromBoard={(wId) => setDraggedWorkerId(wId)} onReorderJob={handleReorderJobs} onReorderClient={handleReorderClients} onEditNote={handleOpenNote} onUpdateJobReinforcementGroups={handleUpdateJobReinforcementGroups} draggedWorkerId={draggedWorkerId} />
              </div>
          )}
          {view === 'compact' && <CompactPlanningView planning={planning} />}
@@ -2831,6 +3479,7 @@ const App: React.FC = () => {
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest">Estado</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-40">Cambio Estado</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest w-40">Hasta</th>
+                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-center">Días Trab.</th>
                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-500 tracking-widest text-right">Editar</th>
                    </tr>
                  </thead>
@@ -2927,6 +3576,17 @@ const App: React.FC = () => {
                              return <span className="text-red-600 font-black">IND.</span>;
                            })()}
                         </td>
+                        <td className="px-6 py-3 text-center">
+                           {w.contractType === ContractType.FIJO_DISCONTINUO && (
+                             <button 
+                               onClick={() => openDiasTrabajadosModal(w.id)}
+                               className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                               title="Calcular días trabajados"
+                             >
+                               <Calendar className="w-4 h-4" />
+                             </button>
+                           )}
+                        </td>
                         <td className="px-6 py-3 text-right">
                            <button onClick={() => setEditingWorker(w)} className="p-2 hover:bg-blue-50 text-slate-400 hover:text-blue-600 rounded-xl transition-colors">
                               <Edit2 className="w-4 h-4" />
@@ -2937,6 +3597,320 @@ const App: React.FC = () => {
                  </tbody>
                </table>
              </div>
+           </div>
+         )}
+         {view === 'medical' && (
+           <div className="flex-1 bg-slate-50 overflow-y-auto p-8 custom-scrollbar">
+             <div className="flex items-center justify-between mb-8">
+               <div>
+                 <h2 className="text-2xl font-black text-slate-900 italic uppercase">🏥 Salud Laboral</h2>
+                 <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestión Médica y Formación</p>
+               </div>
+               <div className="flex items-center gap-2">
+                 {planning.medicalAlerts.length > 0 && (
+                   <div className="bg-red-100 text-red-700 px-3 py-1 rounded-lg text-xs font-bold">
+                     🔴 {planning.medicalAlerts.length} alertas
+                   </div>
+                 )}
+                 <button 
+                   onClick={() => {
+                     const newCourse: MedicalCourse = {
+                       id: Date.now().toString(),
+                       name: '', // Vacío para reconocimientos, se llenará para cursos
+                       type: 'recognition',
+                       provider: 'Mutua',
+                       issueDate: new Date().toISOString().split('T')[0],
+                       expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                       status: 'active',
+                       assignedWorkerIds: [],
+                       createdAt: new Date().toISOString(),
+                       updatedAt: new Date().toISOString()
+                     };
+                     setPlanning(prev => ({ ...prev, editingMedicalCourse: newCourse }));
+                   }}
+                   className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase hover:bg-blue-700"
+                 >
+                   + Nuevo Registro Médico
+                 </button>
+               </div>
+             </div>
+
+             {/* Tabs de navegación */}
+             <div className="flex gap-4 mb-6 border-b border-slate-200">
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'courses' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'courses' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 📚 Registros Médicos
+               </button>
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'alerts' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'alerts' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 ⚠️ Alertas ({planning.medicalAlerts.length})
+               </button>
+               <button 
+                 onClick={() => setPlanning(prev => ({ ...prev, selectedMedicalTab: 'workers' }))}
+                 className={`pb-3 px-1 text-xs font-black uppercase tracking-wider border-b-2 transition-colors ${
+                   planning.selectedMedicalTab === 'workers' 
+                     ? 'text-blue-600 border-blue-600' 
+                     : 'text-slate-400 border-transparent hover:text-slate-600'
+                 }`}
+               >
+                 👥 Operarios
+               </button>
+             </div>
+
+             {/* Registros Médicos */}
+            {planning.selectedMedicalTab === 'courses' && (
+              <div>
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    value={medicalWorkerFilter}
+                    onChange={(e) => setMedicalWorkerFilter(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="🔍 Filtrar registros por operario..."
+                  />
+                </div>
+                
+                {/* Vista compacta de registros */}
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  {/* Header */}
+                  <div className="grid grid-cols-6 gap-2 p-3 bg-slate-50 border-b border-slate-200">
+                    <div className="text-xs font-bold text-slate-700 uppercase">Tipo</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Proveedor</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Operarios</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Realización</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Caducidad</div>
+                    <div className="text-xs font-bold text-slate-700 uppercase">Acciones</div>
+                  </div>
+                  
+                  {/* Filtrar y mostrar registros */}
+                  {(() => {
+                    const filteredCourses = planning.medicalCourses.filter(course => 
+                      medicalWorkerFilter === '' || 
+                      course.assignedWorkerIds.some(workerId => {
+                        const worker = planning.workers.find(w => w.id === workerId);
+                        return worker && (
+                          worker.name.toLowerCase().includes(medicalWorkerFilter.toLowerCase()) ||
+                          worker.code.toLowerCase().includes(medicalWorkerFilter.toLowerCase())
+                        );
+                      })
+                    );
+                    
+                    return filteredCourses.map(course => {
+                      const assignedWorkers = course.assignedWorkerIds.slice(0, 2).map(workerId => {
+                        const worker = planning.workers.find(w => w.id === workerId);
+                        return worker ? worker.code : '';
+                      }).filter(code => code);
+                      
+                      return (
+                        <div key={course.id} className="grid grid-cols-6 gap-2 p-3 border-b border-slate-100 hover:bg-slate-50 items-center">
+                          <div className="text-sm font-medium text-slate-900 truncate">
+                            {course.type === 'recognition' ? '🏥 Reconocimiento' : (course.name || '📚 Curso')}
+                          </div>
+                          <div className="text-sm text-slate-600 truncate">
+                            {course.provider}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {assignedWorkers.length > 0 ? (
+                              <div className="flex gap-1 flex-wrap">
+                                {assignedWorkers.map((code, index) => (
+                                  <span key={index} className="bg-blue-100 text-blue-700 px-1 py-0.5 rounded text-xs">
+                                    {code}
+                                  </span>
+                                ))}
+                                {course.assignedWorkerIds.length > 2 && (
+                                  <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded text-xs">
+                                    +{course.assignedWorkerIds.length - 2}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">Sin asignar</span>
+                            )}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {course.issueDate || '-'}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {course.expiryDate || '-'}
+                          </div>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: course }))}
+                              className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                              title="Editar"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (confirm('¿Eliminar este registro médico?')) {
+                                  deleteMedicalCourse(course.id);
+                                }
+                              }}
+                              className="p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                              title="Eliminar"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+                
+                {/* Mensaje cuando no hay registros */}
+                {planning.medicalCourses.length === 0 && (
+                  <div className="text-center py-8 text-slate-400">
+                    <HeartPulse className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p className="font-bold uppercase text-xs tracking-widest">No hay registros médicos</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+             {/* Alertas */}
+             {planning.selectedMedicalTab === 'alerts' && (
+               <div>
+                 {/* Vista compacta de alertas */}
+                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                   {/* Header */}
+                   <div className="grid grid-cols-5 gap-2 p-3 bg-slate-50 border-b border-slate-200">
+                     <div className="text-xs font-bold text-slate-700 uppercase">Operario</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Tipo</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Proveedor</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Realización</div>
+                     <div className="text-xs font-bold text-slate-700 uppercase">Caducidad</div>
+                   </div>
+                   
+                   {/* Mostrar alertas */}
+                   {(() => {
+                     if (planning.medicalAlerts.length === 0) {
+                       return (
+                         <div className="text-center py-8 text-slate-400">
+                           <CheckCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                           <p className="font-bold uppercase text-xs tracking-widest">No hay alertas activas</p>
+                           <p className="text-xs text-slate-400 mt-2">Solo se muestran registros que caducan en 30 días o menos</p>
+                         </div>
+                       );
+                     }
+                     
+                     return planning.medicalAlerts.map(alert => {
+                       const alertColor = alert.alertLevel === 'critical' ? 'border-red-500 bg-red-50' : 'border-yellow-500 bg-yellow-50';
+                       const alertIcon = alert.alertLevel === 'critical' ? '🔴' : '🟡';
+                       
+                       return (
+                         <div key={alert.id} className={`grid grid-cols-5 gap-2 p-3 border-l-4 ${alertColor} hover:opacity-80 transition-opacity items-center`}>
+                           <div className="text-sm font-medium text-slate-900">
+                             <div className="flex items-center gap-2">
+                               <span className="text-lg">{alertIcon}</span>
+                               <div>
+                                 <div className="font-medium">{alert.workerName}</div>
+                                 <div className="text-xs text-slate-500">
+                                   {alert.daysUntilExpiry < 0 ? `${Math.abs(alert.daysUntilExpiry)} días caducado` : `${alert.daysUntilExpiry} días`}
+                                 </div>
+                               </div>
+                             </div>
+                           </div>
+                           <div className="text-sm text-slate-600">
+                             {alert.type === 'recognition' ? '🏥 Reconocimiento' : alert.courseName}
+                           </div>
+                           <div className="text-sm text-slate-600 truncate">
+                             {alert.provider}
+                           </div>
+                           <div className="text-sm text-slate-600">
+                             {new Date(alert.expiryDate).toLocaleDateString('es-ES', { 
+                               day: '2-digit', 
+                               month: '2-digit', 
+                               year: 'numeric' 
+                             })}
+                           </div>
+                           <div className="text-sm font-medium">
+                             <span className={`px-2 py-1 rounded text-xs ${
+                               alert.alertLevel === 'critical' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                             }`}>
+                               {alert.alertLevel === 'critical' ? 'CADUCADO' : 'PRÓXIMO'}
+                             </span>
+                           </div>
+                         </div>
+                       );
+                     });
+                   })()}
+                 </div>
+               </div>
+             )}
+
+             {/* Operarios */}
+             {planning.selectedMedicalTab === 'workers' && (
+               <div className="space-y-4">
+                 {planning.workers.filter(worker => !worker.isArchived).map(worker => {
+                   const workerMedicalCourses = planning.medicalCourses.filter(course => 
+                     course.assignedWorkerIds.includes(worker.id)
+                   );
+                   const workerAlerts = planning.medicalAlerts.filter(alert => alert.workerId === worker.id);
+                   const hasAlerts = workerAlerts.length > 0;
+                   
+                   return (
+                     <div key={worker.id} className={`bg-white rounded-xl p-6 border ${
+                       hasAlerts ? 'border-red-200 bg-red-50' : 'border-slate-200'
+                     }`}>
+                       <div className="flex items-center justify-between mb-4">
+                         <div className="flex items-center gap-3">
+                           <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center">
+                             <Users className="w-6 h-6 text-slate-600" />
+                           </div>
+                           <div>
+                             <h4 className="font-bold text-slate-900">{worker.name}</h4>
+                             <p className="text-xs text-slate-500">{worker.code} • {worker.role}</p>
+                           </div>
+                         </div>
+                         {hasAlerts && (
+                           <div className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">
+                             {workerAlerts.length} alertas
+                           </div>
+                         )}
+                       </div>
+                       {workerMedicalCourses.length > 0 && (
+                         <div className="mt-4 pt-4 border-t border-slate-200">
+                           <h5 className="text-sm font-bold text-slate-900 mb-2">Registros asignados:</h5>
+                           <div className="space-y-2">
+                             {workerMedicalCourses.map(course => (
+                               <div key={course.id} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded">
+                                 <div>
+                                   <span className="font-medium">
+                                     {course.type === 'recognition' 
+                                       ? '🏥 Reconocimiento Médico' 
+                                       : course.name || '📚 Curso Formación Laboral'}
+                                   </span>
+                                   <span className="text-xs text-slate-500 ml-2">
+                                     {course.type === 'recognition' ? '🏥' : '📚'} • {course.provider}
+                                   </span>
+                                 </div>
+                                 <div className="text-xs text-slate-500">
+                                   {course.expiryDate && `Caduca: ${new Date(course.expiryDate).toLocaleDateString('es-ES')}`}
+                                 </div>
+                               </div>
+                             ))}
+                           </div>
+                         </div>
+                       )}
+                     </div>
+                   );
+                 })}
+               </div>
+             )}
            </div>
          )}
          {view === 'clients' && (
@@ -3371,6 +4345,20 @@ const App: React.FC = () => {
                              <ChevronRight className="w-5 h-5" />
                           </button>
                        </div>
+                    </div>
+
+                    {/* 🆕 Checkbox de imposición */}
+                    <div className="flex items-center gap-2 mt-3">
+                       <input
+                          type="checkbox"
+                          id="isImposed"
+                          checked={editingJob.isImposed || false}
+                          onChange={(e) => setEditingJob({...editingJob, isImposed: e.target.checked})}
+                          className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                       />
+                       <label htmlFor="isImposed" className="text-xs text-slate-600 cursor-pointer">
+                         Imposición del cliente
+                       </label>
                     </div>
                  </div>
 
@@ -3975,6 +4963,247 @@ const App: React.FC = () => {
                </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* 📅 MODAL DE DÍAS TRABAJADOS */}
+      {diasTrabajadosModal && (
+        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setDiasTrabajadosModal(null)}>
+          <div className="bg-white w-full max-w-6xl rounded-[32px] p-8 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
+            
+            {/* Header */}
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-xl font-black text-slate-900 italic uppercase tracking-tight">Días Trabajados</h2>
+                <p className="text-sm text-slate-600 mt-1">{diasTrabajadosModal.workerName} - FIJO DISCONTINUO</p>
+              </div>
+              <button onClick={() => setDiasTrabajadosModal(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            {/* Selector de mes */}
+            <div className="bg-slate-50 rounded-xl p-4 mb-6">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">Mes y Año</label>
+              <div className="flex items-center gap-4 mt-2">
+                <input 
+                  type="month" 
+                  value={`${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, '0')}`}
+                  onChange={(e) => {
+                    const [year, month] = e.target.value.split('-').map(Number);
+                    setSelectedMonth(new Date(year, month - 1));
+                    setCalculatedDays(null);
+                  }}
+                  className="bg-white border border-slate-200 rounded-lg px-4 py-2 font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                <button 
+                  onClick={() => {
+                    const result = calculateDiasTrabajados(diasTrabajadosModal.workerId, selectedMonth);
+                    setCalculatedDays(result);
+                  }}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg font-black text-xs uppercase tracking-widest hover:bg-blue-700 transition-all"
+                >
+                  Calcular
+                </button>
+              </div>
+            </div>
+
+            {/* Resultados */}
+            {calculatedDays && (
+              <div className="space-y-6">
+                {/* Resumen */}
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="text-center">
+                      <p className="text-2xl font-black text-blue-600">{calculatedDays.total}</p>
+                      <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mt-1">Días Totales</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-black text-green-600">{calculatedDays.workedDays.length}</p>
+                      <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mt-1">Días Trabajados</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-black text-amber-600">{calculatedDays.weekendAndHolidaysWorked?.length || 0}</p>
+                      <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mt-1">Fines Semana/Festivos</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-black text-purple-600">{calculatedDays.altaPeriods?.length || 0}</p>
+                      <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mt-1">Bloques (Nóminas)</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Calendario simplificado */}
+                <div className="bg-white rounded-xl border border-slate-200 p-3">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-2">Calendario</h3>
+                  <div className="grid grid-cols-7 gap-px bg-slate-200 rounded-lg overflow-hidden">
+                    {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(day => (
+                      <div key={day} className="bg-slate-50 text-center text-[7px] font-black text-slate-500 uppercase tracking-widest py-1">
+                        {day}
+                      </div>
+                    ))}
+                    {(() => {
+                      // Generar calendario completo del mes usando MISMA LÓGICA QUE LISTADO
+                      const year = selectedMonth.getFullYear();
+                      const month = selectedMonth.getMonth();
+                      const firstDay = new Date(year, month, 1);
+                      const lastDay = new Date(year, month + 1, 0);
+                      const daysInMonth = lastDay.getDate();
+                      let startingDayOfWeek = firstDay.getDay(); // 0 = Domingo, 6 = Sábado
+                      
+                      // Convertir a lunes como primer día (0=Lunes, 6=Domingo)
+                      startingDayOfWeek = startingDayOfWeek === 0 ? 6 : startingDayOfWeek - 1;
+                      
+                      // Crear array con todos los días del mes
+                      const calendarDays = [];
+                      
+                      // Añadir espacios vacíos antes del primer día
+                      for (let i = 0; i < startingDayOfWeek; i++) {
+                        calendarDays.push(null);
+                      }
+                      
+                      // Añadir todos los días del mes con MISMA LÓGICA QUE LISTADO
+                      for (let day = 1; day <= daysInMonth; day++) {
+                        // 🎯 USAR EXACTAMENTE LA MISMA CREACIÓN DE FECHA QUE EL LISTADO
+                        const currentDate = new Date(year, month, day, 12, 0, 0);
+                        calendarDays.push(currentDate);
+                      }
+                      
+                      return calendarDays.map((date, index) => {
+                        if (!date) {
+                          // Espacio vacío
+                          return <div key={`empty-${index}`} className="bg-white h-6"></div>;
+                        }
+                        
+                        const dateStr = date.toISOString().split('T')[0];
+                        
+                        // 🎯 USAR DATOS DIRECTOS DEL LISTADO DETALLADO
+                        const detail = calculatedDays.details.find(d => d.dateStr === dateStr);
+                        
+                        if (!detail) {
+                          // Día que no está en el cálculo (fuera de períodos de alta)
+                          return (
+                            <div 
+                              key={index}
+                              className="bg-white h-6 flex items-center justify-center text-[7px] font-black text-slate-300"
+                              title={`${dateStr} - Fuera de período de alta`}
+                            >
+                              {date.getDate()}
+                            </div>
+                          );
+                        }
+                        
+                        // 🎯 USAR EXACTAMENTE LOS MISMOS DATOS QUE EL LISTADO
+                        const isWorked = detail.isWorked;
+                        const jobCount = detail.jobCount;
+                        const isWeekendOrHolidayWorked = detail.isWeekendOrHolidayWorked;
+                        
+                        // 🎯 LÓGICA DE COLORES (IGUAL QUE LISTADO)
+                        let bgClass;
+                        if (isWeekendOrHolidayWorked) {
+                          // 🟡 Amarillo suave: Fin de semana/festivo trabajado
+                          bgClass = 'bg-yellow-200 text-yellow-900';
+                        } else if (isWorked && jobCount > 0) {
+                          // 🟢 Verde suave: Tiene tareas asignadas
+                          bgClass = 'bg-green-200 text-green-900';
+                        } else {
+                          // ⚪ Gris: Alta sin tareas (días laborables sin trabajo)
+                          bgClass = 'bg-slate-100 text-slate-600';
+                        }
+                        
+                        return (
+                          <div 
+                            key={index}
+                            className={`${bgClass} h-6 flex items-center justify-center text-[7px] font-black`}
+                            title={`${dateStr} - ${isWorked && jobCount > 0 ? 'Con tareas asignadas' : isWorked ? 'Trabajado sin tareas (fin de semana/festivo)' : 'Alta sin tareas'}`}
+                          >
+                            {date.getDate()}
+                          </div>
+                        );
+                      });
+                    })()}
+                    </div>
+                </div>
+
+                {/* Listado detallado */}
+                <div className="bg-white rounded-xl border border-slate-200 p-3">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-2">Listado Detallado</h3>
+                  <div className="max-h-32 overflow-y-auto">
+                    <div className="grid grid-cols-7 gap-px bg-slate-200 rounded-lg overflow-hidden">
+                      {['Día', 'Fecha', 'Día Semana', 'Estado', 'Tareas', 'Tipo', 'Bloque'].map(header => (
+                        <div key={header} className="bg-slate-50 text-center text-[6px] font-black text-slate-500 uppercase tracking-widest py-1">
+                          {header}
+                        </div>
+                      ))}
+                      {calculatedDays.details?.map((detail, index) => {
+                        const isWeekendOrHolidayWorked = detail.isWeekendOrHolidayWorked;
+                        const isWorked = detail.isWorked;
+                        const isWeekend = detail.isWeekend;
+                        
+                        let bgColor = 'bg-white';
+                        let textColor = 'text-slate-700';
+                        let statusColor = 'text-slate-500';
+                        
+                        if (isWeekendOrHolidayWorked) {
+                          bgColor = 'bg-amber-50';
+                          textColor = 'text-amber-700';
+                          statusColor = 'text-amber-600 font-bold';
+                        } else if (isWorked) {
+                          bgColor = 'bg-green-50';
+                          textColor = 'text-green-700';
+                          statusColor = 'text-green-600 font-bold';
+                        } else if (isWeekend) {
+                          bgColor = 'bg-slate-50';
+                          textColor = 'text-slate-400';
+                          statusColor = 'text-slate-400';
+                        } else if (detail.isInAlta) {
+                          bgColor = 'bg-blue-50';
+                          textColor = 'text-blue-700';
+                          statusColor = 'text-blue-600 font-bold';
+                        }
+                        
+                        return (
+                          <React.Fragment key={index}>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {index + 1}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {detail.dateStr}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {detail.dayName}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${statusColor} ${bgColor} py-1`}>
+                              {isWeekendOrHolidayWorked ? 'FIN DE SEMANA' : (isWorked ? 'TRABAJADO' : (isWeekend ? 'Fin de semana' : (detail.isInAlta ? 'ALTA' : '-')))}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {detail.taskCount || 0}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {isWeekendOrHolidayWorked ? 'Fin de semana (cuenta)' : (isWorked ? 'Con tareas' : (isWeekend ? 'Fin de semana' : (detail.isInAlta ? 'Día laborable' : '-')))}
+                            </div>
+                            <div className={`text-center text-[7px] font-medium ${textColor} ${bgColor} py-1`}>
+                              {detail.blockId || '-'}
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 mt-6 pt-6 border-t border-slate-100">
+              <button 
+                onClick={() => setDiasTrabajadosModal(null)} 
+                className="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-50 transition-colors text-sm"
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -4685,6 +5914,324 @@ const App: React.FC = () => {
       </div>
     )}
 
+    {/* 🏥 MODAL DE EDICIÓN DE REGISTROS MÉDICOS */}
+    {planning.editingMedicalCourse && (
+      <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-2xl rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <h2 className="text-2xl font-black text-slate-900 italic uppercase mb-2">
+                {planning.editingMedicalCourse.id.startsWith(Date.now().toString().substring(0, 4)) ? 'Nuevo Registro Médico' : 'Editar Registro Médico'}
+              </h2>
+              <p className="text-sm text-slate-600">
+                {planning.editingMedicalCourse.type === 'recognition' ? '🏥 Reconocimiento Médico' : '📚 Curso Médico'}
+              </p>
+            </div>
+            <button 
+              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: null }))}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+            >
+              <X className="w-6 h-6 text-slate-400" />
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {/* Información básica */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Tipo</label>
+                <select
+                  value={planning.editingMedicalCourse.type}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, type: e.target.value as 'recognition' | 'course' } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="recognition">🏥 Reconocimiento Médico</option>
+                  <option value="course">📚 Curso Formación Laboral</option>
+                </select>
+              </div>
+              {planning.editingMedicalCourse.type === 'course' && (
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Nombre del Curso</label>
+                  <div className="flex gap-2 flex-wrap">
+                    <select
+                      value={planning.editingMedicalCourse.name || ''}
+                      onChange={(e) => setPlanning(prev => ({ 
+                        ...prev, 
+                        editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, name: e.target.value } : null 
+                      }))}
+                      className="flex-1 min-w-0 p-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    >
+                      <option value="">Seleccionar curso...</option>
+                      {availableCourses.map(course => (
+                        <option key={course} value={course}>{course}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setShowAddMedicalCourse(true)}
+                      className="px-3 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors flex-shrink-0"
+                      title="Añadir nuevo curso"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    {planning.editingMedicalCourse.name && availableCourses.includes(planning.editingMedicalCourse.name) && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`¿Eliminar el curso "${planning.editingMedicalCourse.name}"?`)) {
+                            removeMedicalCourse(planning.editingMedicalCourse.name!);
+                            setPlanning(prev => ({ 
+                              ...prev, 
+                              editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, name: '' } : null 
+                            }));
+                          }
+                        }}
+                        className="px-3 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex-shrink-0"
+                        title="Eliminar curso"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal para añadir nuevo curso */}
+            {showAddMedicalCourse && (
+              <div className="fixed inset-0 z-[400] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+                  <h3 className="text-lg font-black text-slate-900 mb-4">Añadir Nuevo Curso</h3>
+                  <input
+                    type="text"
+                    value={medicalCourseName}
+                    onChange={(e) => setMedicalCourseName(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                    placeholder="Nombre del nuevo curso..."
+                    autoFocus
+                  />
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowAddMedicalCourse(false);
+                        setMedicalCourseName('');
+                      }}
+                      className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={addNewMedicalCourse}
+                      disabled={!medicalCourseName.trim()}
+                      className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      Añadir Curso
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Proveedor</label>
+                <div className="flex gap-2 flex-wrap">
+                  <select
+                    value={planning.editingMedicalCourse.provider}
+                    onChange={(e) => setPlanning(prev => ({ 
+                      ...prev, 
+                      editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, provider: e.target.value } : null 
+                    }))}
+                    className="flex-1 min-w-0 p-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  >
+                    <option value="">Seleccionar proveedor...</option>
+                    {availableProviders.map(provider => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setShowAddMedicalProvider(true)}
+                    className="px-3 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors flex-shrink-0"
+                    title="Añadir nuevo proveedor"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                  {planning.editingMedicalCourse.provider && availableProviders.includes(planning.editingMedicalCourse.provider) && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`¿Eliminar el proveedor "${planning.editingMedicalCourse.provider}"?`)) {
+                          removeMedicalProvider(planning.editingMedicalCourse.provider!);
+                          setPlanning(prev => ({ 
+                            ...prev, 
+                            editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, provider: '' } : null 
+                          }));
+                        }
+                      }}
+                      className="px-3 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex-shrink-0"
+                      title="Eliminar proveedor"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Estado (calculado)</label>
+                <input
+                  type="text"
+                  value={planning.editingMedicalCourse.status}
+                  disabled
+                  className="w-full p-3 border border-slate-200 rounded-xl bg-slate-100 text-slate-600"
+                  readOnly
+                />
+              </div>
+            </div>
+
+            {/* Modal para añadir nuevo proveedor */}
+            {showAddMedicalProvider && (
+              <div className="fixed inset-0 z-[400] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+                  <h3 className="text-lg font-black text-slate-900 mb-4">Añadir Nuevo Proveedor</h3>
+                  <input
+                    type="text"
+                    value={medicalProviderName}
+                    onChange={(e) => setMedicalProviderName(e.target.value)}
+                    className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+                    placeholder="Nombre del nuevo proveedor..."
+                    autoFocus
+                  />
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        setShowAddMedicalProvider(false);
+                        setMedicalProviderName('');
+                      }}
+                      className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={addNewMedicalProvider}
+                      disabled={!medicalProviderName.trim()}
+                      className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      Añadir Proveedor
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Fecha de Realización</label>
+                <input
+                  type="date"
+                  value={planning.editingMedicalCourse.issueDate || ''}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, issueDate: e.target.value } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Fecha de Caducidad</label>
+                <input
+                  type="date"
+                  value={planning.editingMedicalCourse.expiryDate || ''}
+                  onChange={(e) => setPlanning(prev => ({ 
+                    ...prev, 
+                    editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, expiryDate: e.target.value } : null 
+                  }))}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Operarios asignados */}
+            <div>
+              <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2">Operarios Asignados</label>
+              <div className="mb-3">
+                <input
+                  type="text"
+                  value={workerSearchFilter}
+                  onChange={(e) => setWorkerSearchFilter(e.target.value)}
+                  className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="🔍 Buscar operarios..."
+                />
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto border border-slate-200 rounded-xl p-3">
+                {planning.workers
+                  .filter(w => !w.isArchived)
+                  .filter(w => 
+                    workerSearchFilter === '' || 
+                    w.name.toLowerCase().includes(workerSearchFilter.toLowerCase()) ||
+                    w.code.toLowerCase().includes(workerSearchFilter.toLowerCase())
+                  )
+                  .map(worker => (
+                  <label key={worker.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={planning.editingMedicalCourse?.assignedWorkerIds.includes(worker.id) || false}
+                      onChange={(e) => {
+                        if (!planning.editingMedicalCourse) return;
+                        
+                        const updatedIds = e.target.checked
+                          ? [...planning.editingMedicalCourse.assignedWorkerIds, worker.id]
+                          : planning.editingMedicalCourse.assignedWorkerIds.filter(id => id !== worker.id);
+                        
+                        setPlanning(prev => ({ 
+                          ...prev, 
+                          editingMedicalCourse: prev.editingMedicalCourse ? { ...prev.editingMedicalCourse, assignedWorkerIds: updatedIds } : null 
+                        }));
+                      }}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <div>
+                      <span className="font-medium text-slate-900">{worker.name}</span>
+                      <span className="text-xs text-slate-500 ml-2">{worker.code}</span>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-8 pt-6 border-t border-slate-100">
+            <button
+              onClick={() => setPlanning(prev => ({ ...prev, editingMedicalCourse: null }))}
+              className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => {
+                if (!planning.editingMedicalCourse) return;
+                
+                // Verificar si es un registro nuevo (no existe en la lista)
+                const isNewRecord = !planning.medicalCourses.some(c => c.id === planning.editingMedicalCourse!.id);
+                
+                if (isNewRecord) {
+                  // Es un nuevo registro
+                  addMedicalCourse(planning.editingMedicalCourse);
+                } else {
+                  // Es un registro existente
+                  updateMedicalCourse(planning.editingMedicalCourse.id, planning.editingMedicalCourse);
+                }
+                setPlanning(prev => ({ ...prev, editingMedicalCourse: null }));
+              }}
+              disabled={!planning.editingMedicalCourse.name.trim() && planning.editingMedicalCourse.type === 'course'}
+              className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {planning.medicalCourses.some(c => c.id === planning.editingMedicalCourse?.id) ? 'Guardar Cambios' : 'Crear Registro'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN */}
     {itemToDelete && (
       <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
@@ -4719,7 +6266,7 @@ const App: React.FC = () => {
 
     {/* INDICADOR DE VERSIÓN */}
     <div className="fixed bottom-2 right-2 text-[8px] text-slate-400 font-mono z-[999]">
-      v1.2.2
+      v1.5.0
     </div>
   </div>
 );
