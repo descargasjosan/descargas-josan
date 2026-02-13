@@ -591,12 +591,13 @@ const App: React.FC = () => {
         }
         
         // 🔄 OPTIMISTIC LOCKING: Guardar timestamp del servidor
-        console.log('🔒 DIAGNÓSTICO - data object:', data);
-        console.log('🔒 DIAGNÓSTICO - data.updated_at:', data?.updated_at);
+        console.log(' DIAGNÓSTICO - data object:', data);
+        console.log(' DIAGNÓSTICO - data.updated_at:', data?.updated_at);
         
         if (data && data.updated_at) {
-          localStorage.setItem('server_timestamp', data.updated_at);
           console.log('🔒 Timestamp del servidor guardado:', data.updated_at);
+          // 🔴 TEMPORALMENTE DESACTIVADO PARA PROBAR CONFLICTO
+          // localStorage.setItem('server_timestamp', data.updated_at); 
         } else {
           console.warn('⚠️ No se pudo guardar timestamp - data o updated_at es nulo');
         }
@@ -749,6 +750,7 @@ const App: React.FC = () => {
           // 🔄 OPTIMISTIC LOCKING: Actualizar timestamp local después de guardar exitosamente
           const newTimestamp = new Date().toISOString();
           localStorage.setItem('server_timestamp', newTimestamp);
+          localStorage.setItem('last_sync_timestamp', newTimestamp); // 🔴 NUEVO: Para sincronización
           console.log('🔒 Timestamp actualizado después de guardar:', newTimestamp);
           
           // Guardar timestamp de última sincronización para Edge
@@ -902,6 +904,7 @@ const App: React.FC = () => {
   const [showSSReport, setShowSSReport] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [selectedNotificationWorkerId, setSelectedNotificationWorkerId] = useState<string | null>(null);
+  const [whatsappWorkerSearch, setWhatsappWorkerSearch] = useState('');
   const [showCalendarSelector, setShowCalendarSelector] = useState(false);
   const [workerListModal, setWorkerListModal] = useState<{clientId: string, centerId: string, date: string} | null>(null);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
@@ -965,6 +968,98 @@ const App: React.FC = () => {
   const updateExportHistory = useCallback((newHistory) => {
     setExportHistory(newHistory);
     localStorage.setItem('exportHistory', JSON.stringify(newHistory));
+  }, []);
+
+  // 🔄 DETECCIÓN DE FOCO PARA SINCRONIZACIÓN AUTOMÁTICA
+  useEffect(() => {
+    let focusTimeout: NodeJS.Timeout;
+    
+    const handleFocus = () => {
+      console.log('🔍 Ventana ganó foco - verificando cambios...');
+      
+      // Pequeño retraso para evitar múltiples verificaciones
+      clearTimeout(focusTimeout);
+      focusTimeout = setTimeout(async () => {
+        await checkForDataChanges();
+      }, 1000);
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('🔍 Página visible - verificando cambios...');
+        handleFocus();
+      }
+    };
+
+    // Añadir listeners
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Limpiar listeners al desmontar
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearTimeout(focusTimeout);
+    };
+  }, []);
+
+  // 🔍 FUNCIÓN PARA VERIFICAR CAMBIOS EN DATOS
+  const checkForDataChanges = useCallback(async () => {
+    try {
+      console.log('🔍 Iniciando verificación de cambios...');
+      
+      // Verificar timestamp del servidor
+      const { data: serverData, error } = await supabase
+        .from('jobs')
+        .select('updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(); // 🔴 CAMBIO: .maybeSingle() en lugar de .single()
+      
+      if (error) {
+        console.warn('⚠️ Error verificando timestamp del servidor:', error);
+        return;
+      }
+      
+      if (serverData?.updated_at) {
+        const serverTimestamp = new Date(serverData.updated_at).getTime();
+        const localTimestamp = localStorage.getItem('last_sync_timestamp');
+        const localTime = localTimestamp ? new Date(localTimestamp).getTime() : 0;
+        
+        console.log('🔍 Timestamps - Servidor:', new Date(serverTimestamp), 'Local:', new Date(localTime));
+        
+        if (serverTimestamp > localTime) {
+          console.log('🔄 ¡Hay cambios más recientes en el servidor!');
+          showDataSyncDialog();
+        } else {
+          console.log('✅ Datos están sincronizados');
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error en verificación de cambios:', error);
+    }
+  }, []);
+
+  // 🔄 DIÁLOGO DE SINCRONIZACIÓN
+  const showDataSyncDialog = useCallback(() => {
+    const shouldReload = window.confirm(
+      '⚠️ Hay cambios más recientes en el servidor.\n\n' +
+      '¿Deseas recargar la página para sincronizar los datos?\n\n' +
+      'Si no recargas, podrías sobrescribir cambios recientes.'
+    );
+    
+    if (shouldReload) {
+      console.log('🔄 Usuario aceptó recargar para sincronizar');
+      // Guardar timestamp actual para evitar bucles
+      localStorage.setItem('last_sync_timestamp', new Date().toISOString());
+      window.location.reload();
+    } else {
+      console.log('⚠️ Usuario rechazó sincronización - posible conflicto');
+      showNotification(
+        '⚠️ Advertencia: Podrías sobrescribir cambios recientes de otros usuarios',
+        'warning'
+      );
+    }
   }, []);
 
   // 🎯 ESTADO PARA RESALTADO DE TRABAJADORES
@@ -1323,7 +1418,29 @@ const App: React.FC = () => {
       );
 
       // Determinar qué operarios exportar
-      const workersToExport = isFirstExport ? currentWorkers : newWorkers;
+      let workersToExport = isFirstExport ? currentWorkers : newWorkers;
+      
+      // 🔴 SIEMPRE AÑADIR OPERARIOS FIJOS (códigos 1 y 2) AL PRIMER LISTADO
+      if (isFirstExport) {
+        const fixedWorkers = planning.workers.filter(worker => 
+          worker.code === '1' || worker.code === '2'
+        );
+        
+        // Añadir operarios fijos si no están ya en la lista
+        fixedWorkers.forEach(fixedWorker => {
+          if (!workersToExport.some(w => w.id === fixedWorker.id)) {
+            workersToExport.push(fixedWorker);
+          }
+        });
+        
+        // Ordenar por código para que aparezcan primero los fijos
+        workersToExport.sort((a, b) => {
+          const aIsFixed = a.code === '1' || a.code === '2' ? 0 : 1;
+          const bIsFixed = b.code === '1' || b.code === '2' ? 0 : 1;
+          if (aIsFixed !== bIsFixed) return aIsFixed - bIsFixed;
+          return (a.code || '').localeCompare(b.code || '');
+        });
+      }
       
       if (!isFirstExport && newWorkers.length === 0) {
         showNotification('No hay nuevos operarios para exportar', 'info');
@@ -1667,6 +1784,7 @@ const App: React.FC = () => {
       if (!error) {
         const newTimestamp = new Date().toISOString();
         localStorage.setItem('server_timestamp', newTimestamp);
+        localStorage.setItem('last_sync_timestamp', newTimestamp); // 🔴 NUEVO: Para sincronización
       }
 
       if (error) {
@@ -1912,11 +2030,51 @@ const App: React.FC = () => {
 
   const copyWorkerListToClipboard = (clientId: string, centerId: string, date: string) => {
     const text = generateWorkerListText(clientId, centerId, date);
-    navigator.clipboard.writeText(text).then(() => {
-      showNotification('Listado de operarios copiado al portapapeles', 'success');
-    }).catch(() => {
+    console.log('🔍 Texto a copiar:', text); // Debug
+    console.log('🔍 Longitud del texto:', text.length); // Debug
+    
+    // Intentar con la API moderna primero
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        console.log('✅ Copiado exitoso al portapapeles'); // Debug
+        showNotification('Listado de operarios copiado al portapapeles', 'success');
+      }).catch((error) => {
+        console.error('❌ Error al copiar con API moderna:', error); // Debug
+        // Fallback al método tradicional
+        fallbackCopyTextToClipboard(text);
+      });
+    } else {
+      console.log('🔄 Usando fallback directo'); // Debug
+      fallbackCopyTextToClipboard(text);
+    }
+  };
+
+  const fallbackCopyTextToClipboard = (text: string) => {
+    console.log('🔄 Ejecutando fallback'); // Debug
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      
+      if (successful) {
+        console.log('✅ Copiado exitoso con fallback'); // Debug
+        showNotification('Listado de operarios copiado al portapapeles', 'success');
+      } else {
+        console.error('❌ Error al copiar con fallback'); // Debug
+        showNotification('Error al copiar el listado', 'error');
+      }
+    } catch (error) {
+      console.error('❌ Error en fallback:', error); // Debug
       showNotification('Error al copiar el listado', 'error');
-    });
+    }
   };
 
   const handleDateChange = (newDate: string) => {
@@ -2630,6 +2788,7 @@ const App: React.FC = () => {
         // 🔒 Actualizar timestamp después de importación
         const newTimestamp = new Date().toISOString();
         localStorage.setItem('server_timestamp', newTimestamp);
+        localStorage.setItem('last_sync_timestamp', newTimestamp); // 🔴 NUEVO: Para sincronización
         
         showNotification("¡Datos importados y guardados correctamente!", "success");
       } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
@@ -3000,6 +3159,7 @@ const App: React.FC = () => {
         // 🔒 Actualizar timestamp después de recuperación
         const newTimestamp = new Date().toISOString();
         localStorage.setItem('server_timestamp', newTimestamp);
+        localStorage.setItem('last_sync_timestamp', newTimestamp); // 🔴 NUEVO: Para sincronización
         
       } else {
         showNotification("No se encontraron datos en ningún backup", "error");
@@ -3205,7 +3365,7 @@ const App: React.FC = () => {
                       </button>
                    </div>
                 </header>
-                <PlanningBoard planning={planning} datesToShow={datesToShow} onDropWorker={handleAssignWorker} onRemoveWorker={handleRemoveWorker} onAddJob={handleOpenNewJob} onEditJob={setEditingJob} onDuplicateJob={handleOpenDuplicate} onShowWorkerList={handleShowWorkerList} onExportAccessList={exportWorkerAccessList} highlightedWorker={highlightedWorker} onDragStartFromBoard={(wId) => setDraggedWorkerId(wId)} onReorderJob={handleReorderJobs} onReorderClient={handleReorderClients} onEditNote={handleOpenNote} onUpdateJobReinforcementGroups={handleUpdateJobReinforcementGroups} draggedWorkerId={draggedWorkerId} />
+                <PlanningBoard planning={planning} datesToShow={datesToShow} onDropWorker={handleAssignWorker} onRemoveWorker={handleRemoveWorker} onAddJob={handleOpenNewJob} onEditJob={setEditingJob} onDuplicateJob={handleOpenDuplicate} onShowWorkerList={handleShowWorkerList} onExportAccessList={exportWorkerAccessList} highlightedWorker={highlightedWorker} onDragStartFromBoard={(wId) => setDraggedWorkerId(wId)} onReorderJob={handleReorderJobs} onReorderClient={handleReorderClients} onEditNote={handleOpenNote} onUpdateJobReinforcementGroups={handleUpdateJobReinforcementGroups} draggedWorkerId={draggedWorkerId} showNotification={showNotification} />
              </div>
          )}
          {view === 'compact' && <CompactPlanningView planning={planning} />}
@@ -5397,7 +5557,10 @@ const App: React.FC = () => {
 
       {/* MODAL NOTIFICACIONES WHATSAPP (DISEÑO CENTRAL DE AVISOS) */}
       {showNotificationsModal && (
-        <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setShowNotificationsModal(false)}>
+        <div className="fixed inset-0 z-[300] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4" onClick={() => {
+          setShowNotificationsModal(false);
+          setWhatsappWorkerSearch(''); // Limpiar búsqueda al cerrar
+        }}>
            <div className="bg-slate-50 w-full max-w-6xl h-[85vh] rounded-[32px] shadow-2xl animate-in zoom-in-95 flex overflow-hidden border border-slate-200" onClick={e => e.stopPropagation()}>
               
               {/* SIDEBAR LISTA (IZQUIERDA) */}
@@ -5414,6 +5577,20 @@ const App: React.FC = () => {
                     </div>
                  </div>
                  
+                 {/* CAMPO DE BÚSQUEDA */}
+                 <div className="p-4 bg-white border-b border-slate-200">
+                    <div className="relative">
+                       <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                       <input
+                          type="text"
+                          placeholder="Buscar operario por nombre, código o DNI..."
+                          value={whatsappWorkerSearch}
+                          onChange={(e) => setWhatsappWorkerSearch(e.target.value)}
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                       />
+                    </div>
+                 </div>
+                 
                  <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-2 bg-slate-50/50">
                     {planning.jobs
                        .filter(j => j.date === planning.currentDate && !j.isCancelled)
@@ -5422,6 +5599,17 @@ const App: React.FC = () => {
                        .map(workerId => {
                           const worker = planning.workers.find(w => w.id === workerId);
                           if (!worker) return null;
+                          
+                          // Aplicar filtro de búsqueda
+                          const searchLower = whatsappWorkerSearch.toLowerCase();
+                          const matchesSearch = !whatsappWorkerSearch || 
+                            worker.name.toLowerCase().includes(searchLower) ||
+                            worker.code?.toLowerCase().includes(searchLower) ||
+                            worker.dni?.toLowerCase().includes(searchLower) ||
+                            worker.apodo?.toLowerCase().includes(searchLower);
+                          
+                          if (!matchesSearch) return null;
+                          
                           const isNotified = (planning.notifications[planning.currentDate] || []).includes(workerId);
                           const isSelected = selectedNotificationWorkerId === workerId;
 
@@ -5474,14 +5662,33 @@ const App: React.FC = () => {
                        const dateObj = new Date(planning.currentDate);
                        const dateStr = dateObj.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
                        
-                       const message = `Hola ${worker?.name.split(' ')[0]},\n\nServicio para: ${dateStr}\n\n${workerJobs.map(j => {
-                          const client = planning.clients.find(c => c.id === j.clientId);
-                          const center = client?.centers.find(ct => ct.id === j.centerId);
+                       const message = `Hola ${worker?.name.split(' ')[0]},\n\nServicio para: ${dateStr}\n\n${(() => {
+                          // Obtener solo la primera tarea del operario ordenada por hora
+                          const firstJob = workerJobs
+                            .sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
+                          
+                          if (!firstJob) return '';
+                          
+                          const client = planning.clients.find(c => c.id === firstJob.clientId);
+                          const center = client?.centers.find(ct => ct.id === firstJob.centerId);
                           const address = center?.address || client?.location || '';
                           const mapUrl = address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '';
                           
-                          return `   • *Cliente:* ${client?.name}\n   • *Centro:* ${center?.name || 'Sede Principal'}\n   • *Dirección:* ${address}\n   • *Ver en Mapa:* ${mapUrl}\n\n   • *Hora Inicio:* ${j.startTime}\n   • *Tarea:* ${j.customName || j.type}`;
-                       }).join('\n\n')}\n\nPor favor, confirma recepción del mensaje`;
+                          // Determinar la hora correcta del operario
+                          let workerStartTime = firstJob.startTime;
+                          
+                          // Si el operario está en grupos de refuerzo, buscar su hora real
+                          if (firstJob.reinforcementGroups && firstJob.reinforcementGroups.length > 0) {
+                            for (const group of firstJob.reinforcementGroups) {
+                              if (group.workerIds.includes(selectedNotificationWorkerId)) {
+                                workerStartTime = group.startTime;
+                                break;
+                              }
+                            }
+                          }
+                          
+                          return `   • *Cliente:* ${client?.name}\n   • *Centro:* ${center?.name || 'Sede Principal'}\n   • *Dirección:* ${address}\n   • *Ver en Mapa:* ${mapUrl}\n\n   • *Hora Inicio:* ${workerStartTime}\n   • *Tarea:* ${firstJob.customName || firstJob.type}`;
+                        })()}\n\nPor favor, confirma recepción del mensaje`;
 
                        const encodedMessage = encodeURIComponent(message);
                        const whatsappUrl = `https://api.whatsapp.com/send/?phone=34${worker?.phone.replace(/\s+/g, '').replace(/^34/, '')}&text=${encodedMessage}&type=phone_number&app_absent=0`;
