@@ -21,6 +21,7 @@ interface PlanningBoardProps {
   onReorderClient: (sourceClientId: string, targetClientId: string) => void;
   onEditNote: (workerId: string, date: string) => void;
   onUpdateJobReinforcementGroups: (jobId: string, groups: ReinforcementGroup[]) => void;
+  showNotification: (message: string, type: 'error' | 'success' | 'warning' | 'info') => void;
 }
 
 const PlanningBoard: React.FC<PlanningBoardProps> = ({ 
@@ -39,7 +40,8 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   onReorderJob,
   onReorderClient,
   onEditNote,
-  onUpdateJobReinforcementGroups
+  onUpdateJobReinforcementGroups,
+  showNotification
 }) => {
   const [dragOverJobId, setDragOverJobId] = useState<string | null>(null);
   const [dragOverClientId, setDragOverClientId] = useState<string | null>(null);
@@ -55,6 +57,10 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
   const [newGroupTime, setNewGroupTime] = useState<string>('');
   const [reinforcementWorkerSearch, setReinforcementWorkerSearch] = useState<string>('');
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>([]);
+  
+  // ESTADO PARA AÑADIR OPERARIOS A GRUPOS EXISTENTES
+  const [addingToGroupId, setAddingToGroupId] = useState<string | null>(null);
+  const [groupWorkerSearch, setGroupWorkerSearch] = useState<Record<string, string>>({});
 
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -540,7 +546,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                                 <span className="text-[9px] font-black text-slate-900 bg-blue-100 px-1 rounded leading-none">{timeGroup}</span>
                                             </div>
                                         )}
-                                        <div className="flex flex-wrap gap-1.5">
+                                        <div className="flex flex-wrap gap-1.5 items-center">
                                             {groupedWorkerIds[timeGroup].map(workerId => {
                                                 const worker = planning.workers.find(w => w.id === workerId);
                                                 if (!worker) return null;
@@ -606,8 +612,22 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                      </div>
                                   ))}
                                   
+                                  {/* Botones de añadir operario y refuerzo - DENTRO DEL CONTENEDOR FLEX-WRAP */}
                                   {!isFull && !isCancelled && !isFinishedManual && !isFinishedTime && (
                                     <div className="flex items-center gap-1">
+                                      <button 
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setSelectorJobId(job.id);
+                                        }} 
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        className="w-6 h-6 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all cursor-pointer"
+                                        title="Añadir Operario"
+                                      >
+                                        <Plus className="w-3 h-3" />
+                                      </button>
+                                      
                                       <button 
                                         onClick={(e) => {
                                           e.preventDefault();
@@ -626,18 +646,6 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                                         title={(job.reinforcementGroups?.length || 0) > 0 ? `${job.reinforcementGroups?.length} grupo(s) de refuerzo` : "Configurar grupos de refuerzo"}
                                       >
                                         <Clock className="w-3 h-3" />
-                                      </button>
-                                      <button 
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          setSelectorJobId(job.id);
-                                        }} 
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        className="w-6 h-6 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all cursor-pointer"
-                                        title="Añadir Operario"
-                                      >
-                                        <Plus className="w-3 h-3" />
                                       </button>
                                     </div>
                                   )}
@@ -682,13 +690,42 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                     <div className="flex justify-between items-center mb-3">
                       <div className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-blue-500" />
-                        <span className="font-black text-sm">{group.startTime}</span>
+                        {/* Hora editable */}
+                        <input
+                          type="time"
+                          className="font-black text-sm bg-transparent border-b border-blue-300 focus:border-blue-500 outline-none px-1 rounded"
+                          value={group.startTime}
+                          onChange={(e) => {
+                            const updatedGroups = reinforcementModal.groups.map(g => 
+                              g.id === group.id 
+                                ? { ...g, startTime: e.target.value }
+                                : g
+                            );
+                            onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
+                            setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                          }}
+                        />
                       </div>
                       <button 
                         onClick={() => {
+                          // Obtener operarios del grupo a eliminar
+                          const workersToRemove = group.workerIds;
+                          
+                          // Eliminar grupo
                           const updatedGroups = reinforcementModal.groups.filter(g => g.id !== group.id);
+                          
+                          // Eliminar operarios de la tarea principal
+                          const currentJob = planning.jobs.find(j => j.id === reinforcementModal.jobId);
+                          if (currentJob) {
+                            // Eliminar cada operario del grupo de la tarea usando onRemoveWorker
+                            workersToRemove.forEach(workerId => {
+                              onRemoveWorker(workerId, reinforcementModal.jobId);
+                            });
+                          }
+                          
                           onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
                           setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                          showNotification(`Grupo de ${group.startTime} eliminado. ${workersToRemove.length} operarios eliminados de la tarea.`, "info");
                         }}
                         className="text-red-400 hover:text-red-600 transition-colors"
                       >
@@ -697,7 +734,7 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                     </div>
                     
                     {/* Operarios asignados a este grupo */}
-                    <div className="space-y-1">
+                    <div className="space-y-1 mb-3">
                       {group.workerIds.map(workerId => {
                         const worker = planning.workers.find(w => w.id === workerId);
                         return worker ? (
@@ -705,11 +742,29 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                             <span className="font-medium">{getWorkerDisplayName(worker)}</span>
                             <button 
                               onClick={() => {
-                                const updatedGroups = reinforcementModal.groups.map(g => 
+                                // Eliminar operario del grupo
+                                let updatedGroups = reinforcementModal.groups.map(g => 
                                   g.id === group.id 
                                     ? { ...g, workerIds: g.workerIds.filter(id => id !== workerId) }
                                     : g
                                 );
+                                
+                                // Si el grupo queda vacío, eliminarlo
+                                const groupAfterRemoval = updatedGroups.find(g => g.id === group.id);
+                                if (groupAfterRemoval && groupAfterRemoval.workerIds.length === 0) {
+                                  updatedGroups = updatedGroups.filter(g => g.id !== group.id);
+                                  showNotification(`Grupo de ${group.startTime} eliminado al quedar vacío.`, "info");
+                                } else {
+                                  showNotification(`${getWorkerDisplayName(worker)} eliminado del grupo de ${group.startTime}.`, "info");
+                                }
+                                
+                                // Actualizar operarios en la tarea principal
+                                const currentJob = planning.jobs.find(j => j.id === reinforcementModal.jobId);
+                                if (currentJob) {
+                                  // Eliminar el operario específico de la tarea usando onRemoveWorker
+                                  onRemoveWorker(workerId, reinforcementModal.jobId);
+                                }
+                                
                                 onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
                                 setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
                               }}
@@ -721,6 +776,81 @@ const PlanningBoard: React.FC<PlanningBoardProps> = ({
                         ) : null;
                       })}
                     </div>
+                    
+                    {/* Botón para añadir más operarios a este grupo */}
+                    <button 
+                      onClick={() => {
+                        // Abrir selector de operarios para este grupo
+                        setAddingToGroupId(group.id);
+                      }}
+                      className="w-full py-2 bg-blue-50 text-blue-600 rounded-lg font-black text-xs uppercase tracking-widest hover:bg-blue-100 transition-colors border border-blue-200"
+                    >
+                      + Añadir Operario a este Grupo
+                    </button>
+                    
+                    {/* Selector de operarios para este grupo */}
+                    {addingToGroupId === group.id && (
+                      <div className="mt-3 p-3 bg-white rounded-lg border border-blue-200">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-black text-blue-600">Seleccionar Operario</span>
+                          <button 
+                            onClick={() => setAddingToGroupId(null)}
+                            className="text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                        
+                        {/* Filtro de búsqueda para este grupo */}
+                        <div className="relative mb-2">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Buscar operario..."
+                            className="w-full bg-slate-50 border border-slate-200 rounded pl-7 pr-2 py-1 text-xs font-bold text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                            value={groupWorkerSearch[group.id] || ''}
+                            onChange={(e) => setGroupWorkerSearch(prev => ({ ...prev, [group.id]: e.target.value }))}
+                          />
+                        </div>
+                        
+                        {/* Lista de operarios disponibles para este grupo */}
+                        <div className="max-h-32 overflow-y-auto border border-slate-200 rounded bg-slate-50">
+                          {planning.workers
+                            .filter(w => !w.isArchived)
+                            .filter(w => !group.workerIds.includes(w.id))
+                            .filter(w => !reinforcementModal.groups.some(g => g.id !== group.id && g.workerIds.includes(w.id)))
+                            .filter(w => {
+                              const search = groupWorkerSearch[group.id] || '';
+                              return search === '' || 
+                                w.name.toLowerCase().includes(search.toLowerCase()) ||
+                                w.code.toLowerCase().includes(search.toLowerCase());
+                            })
+                            .map(worker => (
+                              <button
+                                key={worker.id}
+                                onClick={() => {
+                                  const updatedGroups = reinforcementModal.groups.map(g => 
+                                    g.id === group.id 
+                                      ? { ...g, workerIds: [...g.workerIds, worker.id] }
+                                      : g
+                                  );
+                                  onUpdateJobReinforcementGroups(reinforcementModal.jobId, updatedGroups);
+                                  setReinforcementModal({ ...reinforcementModal, groups: updatedGroups });
+                                  setAddingToGroupId(null);
+                                  setGroupWorkerSearch(prev => ({ ...prev, [group.id]: '' }));
+                                  showNotification(`${getWorkerDisplayName(worker)} añadido al grupo de ${group.startTime}`, "success");
+                                }}
+                                className="w-full text-left p-2 hover:bg-white transition-colors border-b border-slate-100 last:border-0"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-medium">{getWorkerDisplayName(worker)}</span>
+                                  <span className="text-xs text-slate-500">({worker.code})</span>
+                                </div>
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
